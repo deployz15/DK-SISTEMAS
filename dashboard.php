@@ -86,38 +86,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gerar_relatorio'])) {
     }
 }
 
-// Substitua a função buscarProdutos por:
-function buscarProdutos($pdo, $id_loja, $pesquisa = '', $limit = 10, $offset = 0) {
+function buscarProdutos($pdo, $id_loja, $pesquisa = '', $limit = 12, $offset = 0) {
     $sql = "SELECT * FROM produtos WHERE id_loja = :id_loja AND ativo = 1";
     $params = [':id_loja' => $id_loja];
-    
+
     if (!empty($pesquisa)) {
-        $pesquisa = removerAcentos($pesquisa);
         $termo = "%" . str_replace(' ', '%', trim($pesquisa)) . "%";
-        
-        $sql .= " AND (nome_produto LIKE :pesquisa_nome 
-                      OR referencia_interna LIKE :pesquisa_ref
-                      OR codigo_barras_ean = :codigo_exato
-                      OR descricao LIKE :pesquisa_desc)";
-        
+        $sql .= " AND (
+            nome_produto COLLATE utf8_general_ci LIKE :pesquisa_nome
+            OR referencia_interna COLLATE utf8_general_ci LIKE :pesquisa_ref
+            OR codigo_barras_ean LIKE :pesquisa_cod
+            OR descricao COLLATE utf8_general_ci LIKE :pesquisa_desc
+        )";
         $params[':pesquisa_nome'] = $termo;
         $params[':pesquisa_ref'] = $termo;
-        $params[':codigo_exato'] = trim($pesquisa);
+        $params[':pesquisa_cod'] = $termo;
         $params[':pesquisa_desc'] = $termo;
     }
-    
+
     $sql .= " ORDER BY nome_produto LIMIT :limit OFFSET :offset";
     $params[':limit'] = (int)$limit;
     $params[':offset'] = (int)$offset;
-    
+
     try {
         $stmt = $pdo->prepare($sql);
-        
         foreach ($params as $key => $val) {
-            $type = is_int($val) ? PDO::PARAM_INT : PDO::PARAM_STR;
-            $stmt->bindValue($key, $val, $type);
+            // LIMIT e OFFSET precisam ser passados como inteiros
+            if ($key === ':limit' || $key === ':offset') {
+                $stmt->bindValue($key, $val, PDO::PARAM_INT);
+            } else {
+                $stmt->bindValue($key, $val, PDO::PARAM_STR);
+            }
         }
-        
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (PDOException $e) {
@@ -126,18 +126,8 @@ function buscarProdutos($pdo, $id_loja, $pesquisa = '', $limit = 10, $offset = 0
     }
 }
 
-// Adicione esta nova função auxiliar:
-function removerAcentos($string) {
-    return preg_replace(array(
-        "/(á|à|ã|â|ä)/", "/(Á|À|Ã|Â|Ä)/",
-        "/(é|è|ê|ë)/", "/(É|È|Ê|Ë)/",
-        "/(í|ì|î|ï)/", "/(Í|Ì|Î|Ï)/",
-        "/(ó|ò|õ|ô|ö)/", "/(Ó|Ò|Õ|Ô|Ö)/",
-        "/(ú|ù|û|ü)/", "/(Ú|Ù|Û|Ü)/",
-        "/(ñ)/", "/(Ñ)/", "/(ç)/", "/(Ç)/"
-    ), explode(" ","a A e E i I o O u U n N c C"), $string);
-}
 
+// Função para buscar clientes
 function buscarClientes($pdo, $id_loja, $pesquisa = '') {
     $sql = "SELECT * FROM clientes WHERE id_loja = :id_loja";
     $params = [':id_loja' => $id_loja];
@@ -297,12 +287,11 @@ if (isset($_GET['excluir_produto'])) {
         
         // Verifica se o produto pertence à loja antes de excluir
         // Marca o produto como inativo (não exclui fisicamente)
-$stmt = $pdo->prepare("UPDATE produtos SET ativo = 0 WHERE id_produto = :id_produto AND id_loja = :id_loja");
-$stmt->execute([
-    'id_produto' => $id_produto,
-    'id_loja' => $id_loja
-]);
-
+        $stmt = $pdo->prepare("UPDATE produtos SET ativo = 0 WHERE id_produto = :id_produto AND id_loja = :id_loja");
+        $stmt->execute([
+            'id_produto' => $id_produto,
+            'id_loja' => $id_loja
+        ]);
         
         $pdo->commit();
         
@@ -560,15 +549,17 @@ if (isset($_GET['editar_cliente'])) {
 }
 
 // Configurações de paginação
-$produtos_por_pagina = 20; // Itens por página
+$produtos_por_pagina = 12; // Alterado para 12 produtos por página
 $pagina_atual = isset($_GET['pagina']) ? max(1, (int)$_GET['pagina']) : 1;
 $offset = ($pagina_atual - 1) * $produtos_por_pagina;
+
+
+
 
 // Contagem total de produtos com filtros
 try {
     // Parâmetros de pesquisa
     $pesquisa = isset($_GET['pesquisa_produtos']) ? trim($_GET['pesquisa_produtos']) : '';
-    $categoria = isset($_GET['categoria']) ? (int)$_GET['categoria'] : null;
     $ativo = isset($_GET['mostrar_inativos']) ? 0 : 1; // Filtro padrão: só ativos
 
     // Query base
@@ -581,19 +572,16 @@ try {
         ':ativo' => $ativo
     ];
 
-    // Filtro de pesquisa
+    // Filtro de pesquisa (CORRIGIDO: agora usa COLLATE utf8_general_ci)
     if ($pesquisa !== '') {
-        $sql_count .= " AND (nome_produto LIKE :pesquisa 
-                          OR referencia_interna LIKE :pesquisa 
-                          OR codigo_barras_ean LIKE :pesquisa 
-                          OR descricao LIKE :pesquisa)";
-        $params_count[':pesquisa'] = '%' . $pesquisa . '%';
-    }
-
-    // Filtro por categoria
-    if ($categoria) {
-        $sql_count .= " AND id_categoria = :categoria";
-        $params_count[':categoria'] = $categoria;
+        $termo = "%" . str_replace(' ', '%', trim($pesquisa)) . "%";
+        $sql_count .= " AND (
+            nome_produto COLLATE utf8_general_ci LIKE :pesquisa 
+            OR referencia_interna COLLATE utf8_general_ci LIKE :pesquisa 
+            OR codigo_barras_ean LIKE :pesquisa 
+            OR descricao COLLATE utf8_general_ci LIKE :pesquisa
+        )";
+        $params_count[':pesquisa'] = $termo;
     }
 
     // Execução segura com bind param
@@ -606,11 +594,7 @@ try {
         );
     }
     
-    if (!$stmt_count->execute()) {
-        throw new PDOException("Erro ao executar contagem de produtos");
-    }
-    
-    // Cálculo de paginação
+    $stmt_count->execute();
     $total_produtos = (int)$stmt_count->fetchColumn();
     $total_paginas = max(1, ceil($total_produtos / $produtos_por_pagina));
 
@@ -620,37 +604,53 @@ try {
     $total_paginas = 1;
 }
 
-// Consulta principal com LIMIT
-$sql_produtos = str_replace('COUNT(*)', '*', $sql_count) . 
-               " ORDER BY nome_produto ASC 
-                LIMIT :limit OFFSET :offset";
+// Consulta principal com LIMIT (já estava correto, mas confira se está igual ao abaixo)
+$sql_produtos = "SELECT * FROM produtos WHERE id_loja = :id_loja AND ativo = :ativo";
+$params_produtos = [
+    ':id_loja' => (int)$id_loja,
+    ':ativo' => $ativo
+];
 
-// Executar consulta principal (mesmos parâmetros + paginação)
-$params_count[':limit'] = $produtos_por_pagina;
-$params_count[':offset'] = $offset;
-
-$stmt_produtos = $pdo->prepare($sql_produtos);
-foreach ($params_count as $key => $val) {
-    $stmt_produtos->bindValue(
-        $key, 
-        $val, 
-        is_int($val) ? PDO::PARAM_INT : PDO::PARAM_STR
-    );
+if ($pesquisa !== '') {
+    $termo = "%" . str_replace(' ', '%', trim($pesquisa)) . "%";
+    $sql_produtos .= " AND (
+        nome_produto COLLATE utf8_general_ci LIKE :pesquisa 
+        OR referencia_interna COLLATE utf8_general_ci LIKE :pesquisa 
+        OR codigo_barras_ean LIKE :pesquisa 
+        OR descricao COLLATE utf8_general_ci LIKE :pesquisa
+    )";
+    $params_produtos[':pesquisa'] = $termo;
 }
-$stmt_produtos->execute();
-$produtos = $stmt_produtos->fetchAll(PDO::FETCH_ASSOC);
+
+$sql_produtos .= " ORDER BY nome_produto ASC LIMIT :limit OFFSET :offset";
+$params_produtos[':limit'] = $produtos_por_pagina;
+$params_produtos[':offset'] = $offset;
+
+// ... (continua o código)
 
 
-// Buscar produtos paginados
-$produtos = buscarProdutos($pdo, $id_loja, $pesquisa, $produtos_por_pagina, $offset);
+// Executar consulta principal
+try {
+    $stmt_produtos = $pdo->prepare($sql_produtos);
+    foreach ($params_produtos as $key => $val) {
+        $stmt_produtos->bindValue(
+            $key, 
+            $val, 
+            is_int($val) ? PDO::PARAM_INT : PDO::PARAM_STR
+        );
+    }
+    $stmt_produtos->execute();
+    $produtos = $stmt_produtos->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Erro ao buscar produtos: " . $e->getMessage());
+    $produtos = [];
+}
 
 // Determinar seção ativa
 $secao_ativa = $_GET['secao'] ?? 'dashboard';
 
 // Buscar dados para as seções
 $clientes = buscarClientes($pdo, $id_loja, $_GET['pesquisa_clientes'] ?? '');
-
-
 
 // Verificar status do caixa e buscar vendas do dia
 $stmt_caixa = $pdo->prepare("SELECT * FROM caixa WHERE cnpj_loja = :cnpj_loja ORDER BY id DESC LIMIT 1");
@@ -2764,3 +2764,4 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
 </body>
 </html>
 
+ buscarProdutos
