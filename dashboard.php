@@ -86,6 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gerar_relatorio'])) {
     }
 }
 
+
 function buscarProdutos($pdo, $id_loja, $pesquisa = '', $limit = 12, $offset = 0) {
     $sql = "SELECT * FROM produtos WHERE id_loja = :id_loja AND ativo = 1";
     $params = [':id_loja' => $id_loja];
@@ -104,19 +105,12 @@ function buscarProdutos($pdo, $id_loja, $pesquisa = '', $limit = 12, $offset = 0
         $params[':pesquisa_desc'] = $termo;
     }
 
-    $sql .= " ORDER BY nome_produto LIMIT :limit OFFSET :offset";
-    $params[':limit'] = (int)$limit;
-    $params[':offset'] = (int)$offset;
+    $sql .= " ORDER BY nome_produto LIMIT $limit OFFSET $offset";
 
     try {
         $stmt = $pdo->prepare($sql);
         foreach ($params as $key => $val) {
-            // LIMIT e OFFSET precisam ser passados como inteiros
-            if ($key === ':limit' || $key === ':offset') {
-                $stmt->bindValue($key, $val, PDO::PARAM_INT);
-            } else {
-                $stmt->bindValue($key, $val, PDO::PARAM_STR);
-            }
+            $stmt->bindValue($key, $val, PDO::PARAM_STR);
         }
         $stmt->execute();
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -125,7 +119,6 @@ function buscarProdutos($pdo, $id_loja, $pesquisa = '', $limit = 12, $offset = 0
         return [];
     }
 }
-
 
 // Função para buscar clientes
 function buscarClientes($pdo, $id_loja, $pesquisa = '') {
@@ -2764,4 +2757,4 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
 </body>
 </html>
 
- buscarProdutos
+buscarProdutos
