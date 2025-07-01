@@ -1,48 +1,57 @@
 <?php
 session_start();
-session_regenerate_id(true); // Proteção contra fixation
+session_regenerate_id(true);
 
 if (!isset($_SESSION['usuario_logado']) || !$_SESSION['usuario_logado']) {
     header('Location: login.php');
     exit;
 }
 
-require_once 'conexao.php'; // Arquivo de conexão PDO
+require_once 'conexao.php';
 
+// Dados da sessão
 $usuario = $_SESSION['nome_usuario_logado'] ?? '';
 $cnpj_loja = $_SESSION['cnpj_loja_logada'] ?? '';
 
-// Buscar id_loja pelo CNPJ
-$stmt = $pdo->prepare("SELECT id_loja, nome_fantasia FROM lojas WHERE cnpj = :cnpj");
+// Buscar o caminho da logo da loja
+$stmt = $pdo->prepare("SELECT logo_path FROM lojas WHERE cnpj = :cnpj");
+$stmt->bindParam(':cnpj', $cnpj_loja);
+$stmt->execute();
+$logo_loja = $stmt->fetchColumn();
+
+// Buscar dados da loja
+$stmt = $pdo->prepare("SELECT id_loja, nome_fantasia, razao_social FROM lojas WHERE cnpj = :cnpj");
 $stmt->bindParam(':cnpj', $cnpj_loja, PDO::PARAM_STR);
 $stmt->execute();
 $loja = $stmt->fetch(PDO::FETCH_ASSOC);
-$id_loja = $loja['id_loja'] ?? null;
 
-if (!$id_loja) {
+if (!$loja) {
     die("Erro: Loja não encontrada para o CNPJ informado.");
 }
 
-$nome_loja = $loja['nome_fantasia'] ?? '';
+$id_loja = $loja['id_loja'];
+$nome_loja = $loja['nome_fantasia'] ?? $loja['razao_social'] ?? '';
 
-// Processar filtro de relatório se enviado
+// Processar filtro de relatório
 $relatorio_data = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gerar_relatorio'])) {
     $data_inicio = $_POST['data_inicio'] ?? date('Y-m-01');
     $data_fim = $_POST['data_fim'] ?? date('Y-m-t');
     
-    // Validar datas
     if (strtotime($data_fim) < strtotime($data_inicio)) {
         $erro_relatorio = "A data final não pode ser anterior à data inicial";
     } else {
         // Buscar vendas no período
         $stmt = $pdo->prepare("
-            SELECT v.*, c.nome_razao_social 
+            SELECT v.*, c.nome_razao_social, 
+                   GROUP_CONCAT(DISTINCT p.forma_pagamento SEPARATOR ', ') as formas_pagamento
             FROM vendas v
             LEFT JOIN clientes c ON v.id_cliente = c.id_cliente
+            LEFT JOIN pagamentos_venda p ON v.id_venda = p.id_venda
             WHERE v.cnpj_loja = :cnpj_loja
               AND DATE(v.data_hora_venda) BETWEEN :data_inicio AND :data_fim
               AND v.status_venda = 'CONCLUIDA'
+            GROUP BY v.id_venda
             ORDER BY v.data_hora_venda DESC
         ");
         $stmt->execute([
@@ -86,80 +95,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gerar_relatorio'])) {
     }
 }
 
-// Substitua a função buscarProdutos por:
-function buscarProdutos($pdo, $id_loja, $pesquisa = '', $limit = 10, $offset = 0) {
-    $sql = "SELECT * FROM produtos WHERE id_loja = :id_loja AND ativo = 1";
-    $params = [':id_loja' => $id_loja];
-    
-    if (!empty($pesquisa)) {
-        $pesquisa = removerAcentos($pesquisa);
-        $termo = "%" . str_replace(' ', '%', trim($pesquisa)) . "%";
-        
-        $sql .= " AND (nome_produto LIKE :pesquisa_nome 
-                      OR referencia_interna LIKE :pesquisa_ref
-                      OR codigo_barras_ean = :codigo_exato
-                      OR descricao LIKE :pesquisa_desc)";
-        
-        $params[':pesquisa_nome'] = $termo;
-        $params[':pesquisa_ref'] = $termo;
-        $params[':codigo_exato'] = trim($pesquisa);
-        $params[':pesquisa_desc'] = $termo;
-    }
-    
-    $sql .= " ORDER BY nome_produto LIMIT :limit OFFSET :offset";
-    $params[':limit'] = (int)$limit;
-    $params[':offset'] = (int)$offset;
-    
-    try {
-        $stmt = $pdo->prepare($sql);
-        
-        foreach ($params as $key => $val) {
-            $type = is_int($val) ? PDO::PARAM_INT : PDO::PARAM_STR;
-            $stmt->bindValue($key, $val, $type);
-        }
-        
-        $stmt->execute();
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (PDOException $e) {
-        error_log("Erro PDO: " . $e->getMessage());
-        return [];
-    }
-}
-
-// Adicione esta nova função auxiliar:
+// Funções auxiliares
 function removerAcentos($string) {
-    return preg_replace(array(
+    return preg_replace([
         "/(á|à|ã|â|ä)/", "/(Á|À|Ã|Â|Ä)/",
         "/(é|è|ê|ë)/", "/(É|È|Ê|Ë)/",
         "/(í|ì|î|ï)/", "/(Í|Ì|Î|Ï)/",
         "/(ó|ò|õ|ô|ö)/", "/(Ó|Ò|Õ|Ô|Ö)/",
         "/(ú|ù|û|ü)/", "/(Ú|Ù|Û|Ü)/",
         "/(ñ)/", "/(Ñ)/", "/(ç)/", "/(Ç)/"
-    ), explode(" ","a A e E i I o O u U n N c C"), $string);
+    ], explode(" ","a A e E i I o O u U n N c C"), $string);
 }
 
-function buscarClientes($pdo, $id_loja, $pesquisa = '') {
-    $sql = "SELECT * FROM clientes WHERE id_loja = :id_loja";
-    $params = [':id_loja' => $id_loja];
-
-    if (!empty($pesquisa)) {
-        $sql .= " AND (nome_razao_social LIKE :pesquisa_nome OR cpf_cnpj LIKE :pesquisa_cpf)";
-        $params[':pesquisa_nome'] = "%$pesquisa%";
-        $params[':pesquisa_cpf'] = "%$pesquisa%";
-    }
-
-    $sql .= " ORDER BY nome_razao_social";
-    $stmt = $pdo->prepare($sql);
-
-    foreach ($params as $key => $val) {
-        $stmt->bindValue($key, $val, is_int($val) ? PDO::PARAM_INT : PDO::PARAM_STR);
-    }
-
-    $stmt->execute();
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
-
-// Função para calcular dígito verificador EAN-13
 function calcularDigitoEAN13($codigo) {
     if (strlen($codigo) != 12) return 0;
     
@@ -172,137 +119,185 @@ function calcularDigitoEAN13($codigo) {
     return $resto === 0 ? 0 : 10 - $resto;
 }
 
-// PROCESSAR CADASTRO DE PRODUTO
+// Gerenciamento de Produtos
 $erro_produto = '';
+$produto_editar = null;
+
+// Processar cadastro de produto
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cadastro_produto'])) {
-    // Pegue os dados do formulário
-    $referencia = trim($_POST['referencia'] ?? '');
-    $nome = trim($_POST['nome'] ?? '');
-    $descricao = trim($_POST['descricao'] ?? '');
-    $preco = floatval(str_replace(',', '.', $_POST['preco'] ?? 0));
-    $estoque = floatval(str_replace(',', '.', $_POST['estoque'] ?? 0));
-    $codigo_barras = trim($_POST['codigo_barras'] ?? '');
-    $unidade_medida = trim($_POST['unidade_medida'] ?? 'UN');
-    $ncm = trim($_POST['ncm'] ?? '01012100');
-    $ibpt = floatval(str_replace(',', '.', $_POST['ibpt'] ?? 4.20));
-
-    // Campos fiscais obrigatórios
-    $origem_mercadoria = '0';
-    $preco_custo = 0.00;
-    $cfop = '5102';
-    $icms_aliquota = 18.00;
-    $pis_aliquota = 0.65;
-    $cofins_aliquota = 3.00;
-
-    // Upload da foto
-    $foto_nome = '';
-    if (isset($_FILES['foto_produto']) && $_FILES['foto_produto']['error'] == UPLOAD_ERR_OK) {
-        $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
-        $file_type = $_FILES['foto_produto']['type'];
-        
-        if (!in_array($file_type, $allowed_types)) {
-            $erro_produto = "Tipo de arquivo não permitido. Apenas JPG, PNG e GIF são aceitos.";
-        } elseif ($_FILES['foto_produto']['size'] > 2 * 1024 * 1024) {
-            $erro_produto = "O arquivo é muito grande. Tamanho máximo permitido: 2MB.";
-        } else {
-            $ext = pathinfo($_FILES['foto_produto']['name'], PATHINFO_EXTENSION);
-            $foto_nome = uniqid() . '.' . strtolower($ext);
-            $upload_dir = __DIR__ . '/uploads/imagens/';
-            
-            if (!is_dir($upload_dir)) {
-                mkdir($upload_dir, 0755, true);
-            }
-            
-            $destino = $upload_dir . $foto_nome;
-            
-            if (!move_uploaded_file($_FILES['foto_produto']['tmp_name'], $destino)) {
-                $erro_produto = "Erro ao fazer upload da imagem.";
-                $foto_nome = '';
-            }
-        }
-    }
+    $dados_produto = [
+        'id_loja' => $id_loja,
+        'nome_produto' => trim($_POST['nome'] ?? ''),
+        'descricao' => trim($_POST['descricao'] ?? ''),
+        'codigo_barras_ean' => trim($_POST['codigo_barras'] ?? ''),
+        'referencia_interna' => trim($_POST['referencia'] ?? ''),
+        'unidade_medida' => trim($_POST['unidade_medida'] ?? 'UN'),
+        'preco_custo' => 0.00,
+        'preco_venda' => floatval(str_replace(',', '.', $_POST['preco'] ?? 0)),
+        'estoque_atual' => floatval(str_replace(',', '.', $_POST['estoque'] ?? 0)),
+        'ncm' => trim($_POST['ncm'] ?? '01012100'),
+        'ibpt' => floatval(str_replace(',', '.', $_POST['ibpt'] ?? 4.20)),
+        'origem_mercadoria' => '0',
+        'cfop' => '5102',
+        'icms_aliquota' => 18.00,
+        'pis_aliquota' => 0.65,
+        'cofins_aliquota' => 3.00,
+        'ativo' => 1
+    ];
 
     // Validação
-    if (empty($erro_produto)) {
-        if (empty($referencia) || empty($nome) || $preco <= 0 || $estoque < 0) {
-            $erro_produto = "Preencha todos os campos obrigatórios corretamente!";
-        } else {
-            try {
-                $pdo->beginTransaction();
+    if (empty($dados_produto['referencia_interna'])) {
+        $erro_produto = "O código de referência é obrigatório!";
+    } elseif (empty($dados_produto['nome_produto'])) {
+        $erro_produto = "O nome do produto é obrigatório!";
+    } elseif ($dados_produto['preco_venda'] <= 0) {
+        $erro_produto = "O preço de venda deve ser maior que zero!";
+    } elseif ($dados_produto['estoque_atual'] < 0) {
+        $erro_produto = "O estoque não pode ser negativo!";
+    } else {
+        try {
+            $pdo->beginTransaction();
+            
+            // Upload da foto
+            $foto_nome = '';
+            if (isset($_FILES['foto_produto']) && $_FILES['foto_produto']['error'] == UPLOAD_ERR_OK) {
+                $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
+                $file_type = $_FILES['foto_produto']['type'];
                 
-                $stmt = $pdo->prepare("INSERT INTO produtos 
-                    (id_loja, nome_produto, descricao, codigo_barras_ean, referencia_interna, unidade_medida, 
-                    preco_custo, preco_venda, estoque_atual, ncm, ibpt, origem_mercadoria, cfop, 
-                    icms_aliquota, pis_aliquota, cofins_aliquota, ativo, foto_produto) 
-                    VALUES 
-                    (:id_loja, :nome_produto, :descricao, :codigo_barras_ean, :referencia_interna, :unidade_medida, 
-                    :preco_custo, :preco_venda, :estoque_atual, :ncm, :ibpt, :origem_mercadoria, :cfop, 
-                    :icms_aliquota, :pis_aliquota, :cofins_aliquota, 1, :foto_produto)
-                ");
-                
-                $params = [
-                    'id_loja' => $id_loja,
-                    'nome_produto' => $nome,
-                    'descricao' => $descricao,
-                    'codigo_barras_ean' => $codigo_barras,
-                    'referencia_interna' => $referencia,
-                    'unidade_medida' => $unidade_medida,
-                    'preco_custo' => $preco_custo,
-                    'preco_venda' => $preco,
-                    'estoque_atual' => $estoque,
-                    'ncm' => $ncm,
-                    'ibpt' => $ibpt,
-                    'origem_mercadoria' => $origem_mercadoria,
-                    'cfop' => $cfop,
-                    'icms_aliquota' => $icms_aliquota,
-                    'pis_aliquota' => $pis_aliquota,
-                    'cofins_aliquota' => $cofins_aliquota,
-                    'foto_produto' => $foto_nome
-                ];
-                
-                $stmt->execute($params);
-                $id_produto_novo = $pdo->lastInsertId();
-
-                // Se não informou código de barras, gera automaticamente
-                if (empty($codigo_barras)) {
-                    $ean_base = str_pad($id_produto_novo, 12, '0', STR_PAD_LEFT);
-                    $ean13 = $ean_base . calcularDigitoEAN13($ean_base);
-
-                    $stmt = $pdo->prepare("UPDATE produtos SET codigo_barras_ean = :ean WHERE id_produto = :id_produto");
-                    $stmt->execute([
-                        'ean' => $ean13,
-                        'id_produto' => $id_produto_novo
-                    ]);
+                if (in_array($file_type, $allowed_types) && $_FILES['foto_produto']['size'] <= 2 * 1024 * 1024) {
+                    $ext = pathinfo($_FILES['foto_produto']['name'], PATHINFO_EXTENSION);
+                    $foto_nome = uniqid() . '.' . strtolower($ext);
+                    $upload_dir = __DIR__ . '/uploads/imagens/';
+                    
+                    if (!is_dir($upload_dir)) {
+                        mkdir($upload_dir, 0755, true);
+                    }
+                    
+                    if (move_uploaded_file($_FILES['foto_produto']['tmp_name'], $upload_dir . $foto_nome)) {
+                        $dados_produto['foto_produto'] = $foto_nome;
+                    }
                 }
-
-                $pdo->commit();
-                
-                // Redireciona para evitar reenvio do formulário
-                header("Location: dashboard.php?secao=produtos&msg=produto_ok");
-                exit;
-            } catch (PDOException $e) {
-                $pdo->rollBack();
-                $erro_produto = "Erro ao cadastrar produto: " . $e->getMessage();
             }
+            
+            // Inserir produto
+            $campos = implode(', ', array_keys($dados_produto));
+            $placeholders = ':' . implode(', :', array_keys($dados_produto));
+            
+            $stmt = $pdo->prepare("INSERT INTO produtos ($campos) VALUES ($placeholders)");
+            $stmt->execute($dados_produto);
+            
+            $id_produto_novo = $pdo->lastInsertId();
+
+            // Gerar EAN-13 se não informado
+            if (empty($dados_produto['codigo_barras_ean'])) {
+                $ean_base = str_pad($id_produto_novo, 12, '0', STR_PAD_LEFT);
+                $ean13 = $ean_base . calcularDigitoEAN13($ean_base);
+
+                $stmt = $pdo->prepare("UPDATE produtos SET codigo_barras_ean = :ean WHERE id_produto = :id_produto");
+                $stmt->execute(['ean' => $ean13, 'id_produto' => $id_produto_novo]);
+            }
+
+            $pdo->commit();
+            
+            header("Location: dashboard.php?secao=produtos&msg=produto_ok");
+            exit;
+        } catch (PDOException $e) {
+            $pdo->rollBack();
+            $erro_produto = "Erro ao cadastrar produto: " . $e->getMessage();
         }
     }
 }
 
-// PROCESSAR EXCLUSÃO DE PRODUTO
+// Processar edição de produto
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['editar_produto'])) {
+    $id_produto = intval($_POST['id_produto']);
+    $dados_produto = [
+        'nome_produto' => trim($_POST['nome'] ?? ''),
+        'descricao' => trim($_POST['descricao'] ?? ''),
+        'codigo_barras_ean' => trim($_POST['codigo_barras'] ?? ''),
+        'referencia_interna' => trim($_POST['referencia'] ?? ''),
+        'unidade_medida' => trim($_POST['unidade_medida'] ?? 'UN'),
+        'preco_venda' => floatval(str_replace(',', '.', $_POST['preco'] ?? 0)),
+        'estoque_atual' => floatval(str_replace(',', '.', $_POST['estoque'] ?? 0)),
+        'ncm' => trim($_POST['ncm'] ?? '01012100'),
+        'ibpt' => floatval(str_replace(',', '.', $_POST['ibpt'] ?? 4.20)),
+        'id_produto' => $id_produto,
+        'id_loja' => $id_loja
+    ];
+
+    // Validação
+    if (empty($dados_produto['referencia_interna']) || empty($dados_produto['nome_produto']) || 
+        $dados_produto['preco_venda'] <= 0 || $dados_produto['estoque_atual'] < 0) {
+        $erro_produto = "Preencha todos os campos obrigatórios corretamente!";
+    } else {
+        try {
+            $pdo->beginTransaction();
+            
+            // Upload da foto (se enviada)
+            if (isset($_FILES['foto_produto']) && $_FILES['foto_produto']['error'] == UPLOAD_ERR_OK) {
+                $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
+                $file_type = $_FILES['foto_produto']['type'];
+                
+                if (in_array($file_type, $allowed_types) && $_FILES['foto_produto']['size'] <= 2 * 1024 * 1024) {
+                    $ext = pathinfo($_FILES['foto_produto']['name'], PATHINFO_EXTENSION);
+                    $foto_nome = uniqid() . '.' . strtolower($ext);
+                    $upload_dir = __DIR__ . '/uploads/imagens/';
+                    
+                    if (!is_dir($upload_dir)) {
+                        mkdir($upload_dir, 0755, true);
+                    }
+                    
+                    if (move_uploaded_file($_FILES['foto_produto']['tmp_name'], $upload_dir . $foto_nome)) {
+                        $dados_produto['foto_produto'] = $foto_nome;
+                    }
+                }
+            }
+            
+            // Montar SQL dinamicamente para atualizar a foto só se foi enviada
+            $sql = "UPDATE produtos SET 
+                nome_produto = :nome_produto,
+                descricao = :descricao,
+                codigo_barras_ean = :codigo_barras_ean,
+                referencia_interna = :referencia_interna,
+                unidade_medida = :unidade_medida,
+                preco_venda = :preco_venda,
+                estoque_atual = :estoque_atual,
+                ncm = :ncm,
+                ibpt = :ibpt";
+            
+            if (isset($dados_produto['foto_produto'])) {
+                $sql .= ", foto_produto = :foto_produto";
+            }
+            
+            $sql .= " WHERE id_produto = :id_produto AND id_loja = :id_loja";
+            
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($dados_produto);
+            
+            $pdo->commit();
+            
+            header("Location: dashboard.php?secao=produtos&msg=produto_atualizado");
+            exit;
+        } catch (PDOException $e) {
+            $pdo->rollBack();
+            $erro_produto = "Erro ao atualizar produto: " . $e->getMessage();
+        }
+    }
+}
+
+// Processar exclusão de produto
 if (isset($_GET['excluir_produto'])) {
     $id_produto = intval($_GET['excluir_produto']);
     
     try {
         $pdo->beginTransaction();
         
-        // Verifica se o produto pertence à loja antes de excluir
-        // Marca o produto como inativo (não exclui fisicamente)
-$stmt = $pdo->prepare("UPDATE produtos SET ativo = 0 WHERE id_produto = :id_produto AND id_loja = :id_loja");
-$stmt->execute([
-    'id_produto' => $id_produto,
-    'id_loja' => $id_loja
-]);
-
+        // Marcar como inativo em vez de excluir
+        $stmt = $pdo->prepare("UPDATE produtos SET ativo = 0 WHERE id_produto = :id_produto AND id_loja = :id_loja");
+        $stmt->execute([
+            'id_produto' => $id_produto,
+            'id_loja' => $id_loja
+        ]);
         
         $pdo->commit();
         
@@ -314,7 +309,7 @@ $stmt->execute([
     }
 }
 
-// BUSCAR DADOS DO PRODUTO PARA EDIÇÃO
+// Buscar dados do produto para edição
 if (isset($_GET['editar_produto'])) {
     $id_produto_editar = intval($_GET['editar_produto']);
     
@@ -331,143 +326,44 @@ if (isset($_GET['editar_produto'])) {
     }
 }
 
-// PROCESSAR EDIÇÃO DE PRODUTO
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['editar_produto'])) {
-    $id_produto = intval($_POST['id_produto']);
-    $referencia = trim($_POST['referencia'] ?? '');
-    $nome = trim($_POST['nome'] ?? '');
-    $descricao = trim($_POST['descricao'] ?? '');
-    $preco = floatval(str_replace(',', '.', $_POST['preco'] ?? 0));
-    $estoque = floatval(str_replace(',', '.', $_POST['estoque'] ?? 0));
-    $codigo_barras = trim($_POST['codigo_barras'] ?? '');
-    $unidade_medida = trim($_POST['unidade_medida'] ?? 'UN');
-    $ncm = trim($_POST['ncm'] ?? '01012100');
-    $ibpt = floatval(str_replace(',', '.', $_POST['ibpt'] ?? 4.20));
-
-    // Upload da foto (se enviada)
-    $foto_nome = '';
-    if (isset($_FILES['foto_produto']) && $_FILES['foto_produto']['error'] == UPLOAD_ERR_OK) {
-        $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
-        $file_type = $_FILES['foto_produto']['type'];
-        
-        if (!in_array($file_type, $allowed_types)) {
-            $erro_produto = "Tipo de arquivo não permitido. Apenas JPG, PNG e GIF são aceitos.";
-        } elseif ($_FILES['foto_produto']['size'] > 2 * 1024 * 1024) {
-            $erro_produto = "O arquivo é muito grande. Tamanho máximo permitido: 2MB.";
-        } else {
-            $ext = pathinfo($_FILES['foto_produto']['name'], PATHINFO_EXTENSION);
-            $foto_nome = uniqid() . '.' . strtolower($ext);
-            $upload_dir = __DIR__ . '/uploads/imagens/';
-            
-            if (!is_dir($upload_dir)) {
-                mkdir($upload_dir, 0755, true);
-            }
-            
-            $destino = $upload_dir . $foto_nome;
-            
-            if (!move_uploaded_file($_FILES['foto_produto']['tmp_name'], $destino)) {
-                $erro_produto = "Erro ao fazer upload da imagem.";
-                $foto_nome = '';
-            }
-        }
-    }
-
-    if (empty($erro_produto)) {
-        if ($referencia && $nome && $preco > 0 && $estoque >= 0) {
-            try {
-                $pdo->beginTransaction();
-                
-                // Monta o SQL dinamicamente para atualizar a foto só se foi enviada uma nova
-                $sql = "UPDATE produtos SET 
-                    nome_produto = :nome_produto,
-                    descricao = :descricao,
-                    codigo_barras_ean = :codigo_barras_ean,
-                    referencia_interna = :referencia_interna,
-                    unidade_medida = :unidade_medida,
-                    preco_venda = :preco_venda,
-                    estoque_atual = :estoque_atual,
-                    ncm = :ncm,
-                    ibpt = :ibpt";
-
-                $params = [
-                    'nome_produto' => $nome,
-                    'descricao' => $descricao,
-                    'codigo_barras_ean' => $codigo_barras,
-                    'referencia_interna' => $referencia,
-                    'unidade_medida' => $unidade_medida,
-                    'preco_venda' => $preco,
-                    'estoque_atual' => $estoque,
-                    'ncm' => $ncm,
-                    'ibpt' => $ibpt,
-                    'id_produto' => $id_produto,
-                    'id_loja' => $id_loja
-                ];
-
-                if ($foto_nome != '') {
-                    $sql .= ", foto_produto = :foto_produto";
-                    $params['foto_produto'] = $foto_nome;
-                }
-
-                $sql .= " WHERE id_produto = :id_produto AND id_loja = :id_loja";
-
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute($params);
-                
-                $pdo->commit();
-
-                header("Location: dashboard.php?secao=produtos&msg=produto_atualizado");
-                exit;
-            } catch (PDOException $e) {
-                $pdo->rollBack();
-                $erro_produto = "Erro ao atualizar produto: " . $e->getMessage();
-            }
-        } else {
-            $erro_produto = "Preencha todos os campos obrigatórios corretamente!";
-        }
-    }
-}
-
-// PROCESSAR CADASTRO/EDIÇÃO/EXCLUSÃO DE CLIENTE
+// Gerenciamento de Clientes
 $erro_cliente = '';
 $cliente_editar = null;
 
-// Cadastro de cliente
+// Processar cadastro/edição de cliente
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cadastro_cliente'])) {
-    $nome = trim($_POST['nome'] ?? '');
-    $cpf_cnpj = trim($_POST['cpf_cnpj'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $telefone = trim($_POST['telefone'] ?? '');
-    $endereco = trim($_POST['endereco'] ?? '');
-    $numero = trim($_POST['numero'] ?? '');
-    $complemento = trim($_POST['complemento'] ?? '');
-    $bairro = trim($_POST['bairro'] ?? '');
-    $cidade = trim($_POST['cidade'] ?? '');
-    $estado = trim($_POST['estado'] ?? '');
-    $cep = trim($_POST['cep'] ?? '');
+    $dados_cliente = [
+        'id_loja' => $id_loja,
+        'nome_razao_social' => trim($_POST['nome'] ?? ''),
+        'cpf_cnpj' => trim($_POST['cpf_cnpj'] ?? ''),
+        'email' => trim($_POST['email'] ?? ''),
+        'telefone' => trim($_POST['telefone'] ?? ''),
+        'endereco' => trim($_POST['endereco'] ?? ''),
+        'numero_endereco' => trim($_POST['numero'] ?? ''),
+        'complemento_endereco' => trim($_POST['complemento'] ?? ''),
+        'bairro' => trim($_POST['bairro'] ?? ''),
+        'cidade' => trim($_POST['cidade'] ?? ''),
+        'estado' => trim($_POST['estado'] ?? ''),
+        'cep' => trim($_POST['cep'] ?? '')
+    ];
 
-    if ($nome === '' || $cidade === '' || $estado === '') {
-        $erro_cliente = "Preencha os campos obrigatórios!";
+    if (empty($dados_cliente['nome_razao_social'])) {
+        $erro_cliente = "O nome/razão social é obrigatório!";
+    } elseif (empty($dados_cliente['cidade'])) {
+        $erro_cliente = "A cidade é obrigatória!";
+    } elseif (empty($dados_cliente['estado'])) {
+        $erro_cliente = "O estado é obrigatório!";
     } else {
         try {
             $stmt = $pdo->prepare("INSERT INTO clientes 
-                (id_loja, nome_razao_social, cpf_cnpj, email, telefone, endereco, numero_endereco, complemento_endereco, bairro, cidade, estado, cep)
+                (id_loja, nome_razao_social, cpf_cnpj, email, telefone, endereco, 
+                numero_endereco, complemento_endereco, bairro, cidade, estado, cep)
                 VALUES
-                (:id_loja, :nome, :cpf_cnpj, :email, :telefone, :endereco, :numero, :complemento, :bairro, :cidade, :estado, :cep)
-            ");
-            $stmt->execute([
-                'id_loja' => $id_loja,
-                'nome' => $nome,
-                'cpf_cnpj' => $cpf_cnpj,
-                'email' => $email,
-                'telefone' => $telefone,
-                'endereco' => $endereco,
-                'numero' => $numero,
-                'complemento' => $complemento,
-                'bairro' => $bairro,
-                'cidade' => $cidade,
-                'estado' => $estado,
-                'cep' => $cep
-            ]);
+                (:id_loja, :nome_razao_social, :cpf_cnpj, :email, :telefone, :endereco, 
+                :numero_endereco, :complemento_endereco, :bairro, :cidade, :estado, :cep)");
+            
+            $stmt->execute($dados_cliente);
+            
             header("Location: dashboard.php?secao=clientes&msg=cliente_ok");
             exit;
         } catch (PDOException $e) {
@@ -476,54 +372,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cadastro_cliente'])) 
     }
 }
 
-// Edição de cliente
+// Processar edição de cliente
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['editar_cliente'])) {
     $id_cliente = intval($_POST['id_cliente']);
-    $nome = trim($_POST['nome'] ?? '');
-    $cpf_cnpj = trim($_POST['cpf_cnpj'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $telefone = trim($_POST['telefone'] ?? '');
-    $endereco = trim($_POST['endereco'] ?? '');
-    $numero = trim($_POST['numero'] ?? '');
-    $complemento = trim($_POST['complemento'] ?? '');
-    $bairro = trim($_POST['bairro'] ?? '');
-    $cidade = trim($_POST['cidade'] ?? '');
-    $estado = trim($_POST['estado'] ?? '');
-    $cep = trim($_POST['cep'] ?? '');
+    $dados_cliente = [
+        'nome_razao_social' => trim($_POST['nome'] ?? ''),
+        'cpf_cnpj' => trim($_POST['cpf_cnpj'] ?? ''),
+        'email' => trim($_POST['email'] ?? ''),
+        'telefone' => trim($_POST['telefone'] ?? ''),
+        'endereco' => trim($_POST['endereco'] ?? ''),
+        'numero_endereco' => trim($_POST['numero'] ?? ''),
+        'complemento_endereco' => trim($_POST['complemento'] ?? ''),
+        'bairro' => trim($_POST['bairro'] ?? ''),
+        'cidade' => trim($_POST['cidade'] ?? ''),
+        'estado' => trim($_POST['estado'] ?? ''),
+        'cep' => trim($_POST['cep'] ?? ''),
+        'id_cliente' => $id_cliente,
+        'id_loja' => $id_loja
+    ];
 
-    if ($nome === '' || $cidade === '' || $estado === '') {
-        $erro_cliente = "Preencha os campos obrigatórios!";
+    if (empty($dados_cliente['nome_razao_social'])) {
+        $erro_cliente = "O nome/razão social é obrigatório!";
+    } elseif (empty($dados_cliente['cidade'])) {
+        $erro_cliente = "A cidade é obrigatória!";
+    } elseif (empty($dados_cliente['estado'])) {
+        $erro_cliente = "O estado é obrigatório!";
     } else {
         try {
             $stmt = $pdo->prepare("UPDATE clientes SET 
-                nome_razao_social = :nome,
+                nome_razao_social = :nome_razao_social,
                 cpf_cnpj = :cpf_cnpj,
                 email = :email,
                 telefone = :telefone,
                 endereco = :endereco,
-                numero_endereco = :numero,
-                complemento_endereco = :complemento,
+                numero_endereco = :numero_endereco,
+                complemento_endereco = :complemento_endereco,
                 bairro = :bairro,
                 cidade = :cidade,
                 estado = :estado,
                 cep = :cep
-                WHERE id_cliente = :id_cliente AND id_loja = :id_loja
-            ");
-            $stmt->execute([
-                'nome' => $nome,
-                'cpf_cnpj' => $cpf_cnpj,
-                'email' => $email,
-                'telefone' => $telefone,
-                'endereco' => $endereco,
-                'numero' => $numero,
-                'complemento' => $complemento,
-                'bairro' => $bairro,
-                'cidade' => $cidade,
-                'estado' => $estado,
-                'cep' => $cep,
-                'id_cliente' => $id_cliente,
-                'id_loja' => $id_loja
-            ]);
+                WHERE id_cliente = :id_cliente AND id_loja = :id_loja");
+            
+            $stmt->execute($dados_cliente);
+            
             header("Location: dashboard.php?secao=clientes&msg=cliente_atualizado");
             exit;
         } catch (PDOException $e) {
@@ -532,7 +423,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['editar_cliente'])) {
     }
 }
 
-// Exclusão de cliente
+// Processar exclusão de cliente
 if (isset($_GET['excluir_cliente'])) {
     $id_cliente = intval($_GET['excluir_cliente']);
     try {
@@ -548,6 +439,23 @@ if (isset($_GET['excluir_cliente'])) {
     }
 }
 
+// Processar upload da logo
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_logo'])) {
+    if (isset($_FILES['logo']) && $_FILES['logo']['error'] == 0) {
+        $ext = pathinfo($_FILES['logo']['name'], PATHINFO_EXTENSION);
+        $nome_arquivo = 'logo_'.$id_loja.'.'.$ext;
+        
+        if (move_uploaded_file($_FILES['logo']['tmp_name'], 'uploads/logos/'.$nome_arquivo)) {
+            // Atualizar no banco
+            $stmt = $pdo->prepare("UPDATE lojas SET logo_path = ? WHERE id_loja = ?");
+            $stmt->execute([$nome_arquivo, $id_loja]);
+            
+            header("Location: dashboard.php");
+            exit;
+        }
+    }
+}
+
 // Buscar dados do cliente para edição
 if (isset($_GET['editar_cliente'])) {
     $id_cliente_editar = intval($_GET['editar_cliente']);
@@ -559,41 +467,40 @@ if (isset($_GET['editar_cliente'])) {
     $cliente_editar = $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
-// Configurações de paginação - ALTERAR PARA 12
-$produtos_por_pagina = 12; // Itens por página
+// Paginação e busca de produtos
+$produtos_por_pagina = 12;
 $pagina_atual = isset($_GET['pagina']) ? max(1, (int)$_GET['pagina']) : 1;
 $offset = ($pagina_atual - 1) * $produtos_por_pagina;
-
-// Parâmetros de pesquisa
 $pesquisa = isset($_GET['pesquisa_produtos']) ? trim($_GET['pesquisa_produtos']) : '';
-$mostrar_inativos = isset($_GET['mostrar_inativos']) ? 0 : 1; // 1 para mostrar apenas ativos
+$mostrar_inativos = isset($_GET['mostrar_inativos']) ? 0 : 1;
 
-// Query para contar total de produtos
+// Contar total de produtos
 try {
-    $sql_count = "SELECT COUNT(*) FROM produtos 
-                 WHERE id_loja = :id_loja 
-                 AND ativo = :ativo";
-    
-    $params_count = [
-        ':id_loja' => $id_loja,
-        ':ativo' => $mostrar_inativos
-    ];
+    $sql_count = "SELECT COUNT(*) FROM produtos WHERE id_loja = :id_loja AND ativo = :ativo";
+    $params_count = [':id_loja' => $id_loja, ':ativo' => $mostrar_inativos];
 
-    // Adicionar filtro de pesquisa se existir
     if (!empty($pesquisa)) {
-        $termo_pesquisa = '%' . $pesquisa . '%';
-        $sql_count .= " AND (nome_produto LIKE :pesquisa 
-                          OR referencia_interna LIKE :pesquisa 
-                          OR codigo_barras_ean LIKE :pesquisa 
-                          OR descricao LIKE :pesquisa)";
-        $params_count[':pesquisa'] = $termo_pesquisa;
+        $pesquisa_sem_acentos = removerAcentos($pesquisa);
+        $termo = "%" . str_replace(' ', '%', trim($pesquisa_sem_acentos)) . "%";
+        $sql_count .= " AND (
+            nome_produto LIKE :pesquisa_nome 
+            OR referencia_interna LIKE :pesquisa_ref
+            OR codigo_barras_ean = :codigo_exato
+            OR descricao LIKE :pesquisa_desc
+        )";
+        $params_count[':pesquisa_nome'] = $termo;
+        $params_count[':pesquisa_ref'] = $termo;
+        $params_count[':codigo_exato'] = trim($pesquisa_sem_acentos);
+        $params_count[':pesquisa_desc'] = $termo;
     }
 
     $stmt_count = $pdo->prepare($sql_count);
-    $stmt_count->execute($params_count);
+    foreach ($params_count as $key => $val) {
+        $stmt_count->bindValue($key, $val, is_int($val) ? PDO::PARAM_INT : PDO::PARAM_STR);
+    }
+    $stmt_count->execute();
     $total_produtos = (int)$stmt_count->fetchColumn();
     $total_paginas = max(1, ceil($total_produtos / $produtos_por_pagina));
-
 } catch (PDOException $e) {
     error_log("Erro na contagem de produtos: " . $e->getMessage());
     $total_produtos = 0;
@@ -602,120 +509,138 @@ try {
 
 // Buscar produtos paginados
 try {
-    $sql_produtos = "SELECT * FROM produtos 
-                    WHERE id_loja = :id_loja 
-                    AND ativo = :ativo";
-    
-    $params_produtos = [
-        ':id_loja' => $id_loja,
-        ':ativo' => $mostrar_inativos
-    ];
+    $sql_produtos = "SELECT * FROM produtos WHERE id_loja = :id_loja AND ativo = :ativo";
+    $params_produtos = [':id_loja' => $id_loja, ':ativo' => $mostrar_inativos];
 
     if (!empty($pesquisa)) {
-        $termo_pesquisa = '%' . $pesquisa . '%';
-        $sql_produtos .= " AND (nome_produto LIKE :pesquisa 
-                              OR referencia_interna LIKE :pesquisa 
-                              OR codigo_barras_ean LIKE :pesquisa 
-                              OR descricao LIKE :pesquisa)";
-        $params_produtos[':pesquisa'] = $termo_pesquisa;
+        $pesquisa_sem_acentos = removerAcentos($pesquisa);
+        $termo = "%" . str_replace(' ', '%', trim($pesquisa_sem_acentos)) . "%";
+        $sql_produtos .= " AND (
+            nome_produto LIKE :pesquisa_nome 
+            OR referencia_interna LIKE :pesquisa_ref
+            OR codigo_barras_ean = :codigo_exato
+            OR descricao LIKE :pesquisa_desc
+        )";
+        $params_produtos[':pesquisa_nome'] = $termo;
+        $params_produtos[':pesquisa_ref'] = $termo;
+        $params_produtos[':codigo_exato'] = trim($pesquisa_sem_acentos);
+        $params_produtos[':pesquisa_desc'] = $termo;
     }
 
-    $sql_produtos .= " ORDER BY nome_produto ASC 
-                     LIMIT :limit OFFSET :offset";
-    
+    $sql_produtos .= " ORDER BY nome_produto ASC LIMIT :limit OFFSET :offset";
     $params_produtos[':limit'] = $produtos_por_pagina;
     $params_produtos[':offset'] = $offset;
 
     $stmt_produtos = $pdo->prepare($sql_produtos);
-    
-    // Bind dos parâmetros
     foreach ($params_produtos as $key => $val) {
-        $stmt_produtos->bindValue(
-            $key, 
-            $val, 
-            is_int($val) ? PDO::PARAM_INT : PDO::PARAM_STR
-        );
+        $stmt_produtos->bindValue($key, $val, is_int($val) ? PDO::PARAM_INT : PDO::PARAM_STR);
     }
-    
     $stmt_produtos->execute();
     $produtos = $stmt_produtos->fetchAll(PDO::FETCH_ASSOC);
-
 } catch (PDOException $e) {
     error_log("Erro ao buscar produtos: " . $e->getMessage());
     $produtos = [];
 }
 
+// Buscar clientes
+$clientes = [];
+try {
+    $sql_clientes = "SELECT * FROM clientes WHERE id_loja = :id_loja";
+    $params_clientes = [':id_loja' => $id_loja];
+
+    if (!empty($_GET['pesquisa_clientes'] ?? '')) {
+        $termo = "%" . trim($_GET['pesquisa_clientes']) . "%";
+        $sql_clientes .= " AND (nome_razao_social LIKE :pesquisa_nome OR cpf_cnpj LIKE :pesquisa_cpf)";
+        $params_clientes[':pesquisa_nome'] = $termo;
+        $params_clientes[':pesquisa_cpf'] = $termo;
+    }
+
+    $sql_clientes .= " ORDER BY nome_razao_social";
+    $stmt_clientes = $pdo->prepare($sql_clientes);
+    foreach ($params_clientes as $key => $val) {
+        $stmt_clientes->bindValue($key, $val, is_int($val) ? PDO::PARAM_INT : PDO::PARAM_STR);
+    }
+    $stmt_clientes->execute();
+    $clientes = $stmt_clientes->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Erro ao buscar clientes: " . $e->getMessage());
+}
 
 // Determinar seção ativa
 $secao_ativa = $_GET['secao'] ?? 'dashboard';
 
-// Buscar dados para as seções
-$clientes = buscarClientes($pdo, $id_loja, $_GET['pesquisa_clientes'] ?? '');
+// Dados para o dashboard
+$caixa_aberto = false;
+$vendas_hoje = ['total_vendas' => 0, 'total_pedidos' => 0];
+$total_clientes = 0;
+$total_produtos_ativos = 0;
+$ultimas_vendas = [];
 
+try {
+    // Verificar status do caixa
+    $stmt_caixa = $pdo->prepare("SELECT * FROM caixa WHERE cnpj_loja = :cnpj_loja ORDER BY id DESC LIMIT 1");
+    $stmt_caixa->bindParam(':cnpj_loja', $cnpj_loja, PDO::PARAM_STR);
+    $stmt_caixa->execute();
+    $caixa = $stmt_caixa->fetch(PDO::FETCH_ASSOC);
+    $caixa_aberto = ($caixa && $caixa['status'] == 'aberto');
 
+    // Vendas do dia
+    if ($caixa_aberto) {
+        $stmt_vendas = $pdo->prepare("
+            SELECT 
+                COALESCE(SUM(valor_total_venda),0) AS total_vendas, 
+                COUNT(*) AS total_pedidos
+            FROM vendas
+            WHERE cnpj_loja = :cnpj_loja
+              AND DATE(data_hora_venda) = CURDATE()
+              AND status_venda = 'CONCLUIDA'
+              AND data_hora_venda >= :data_abertura
+        ");
+        $stmt_vendas->bindParam(':cnpj_loja', $cnpj_loja, PDO::PARAM_STR);
+        $stmt_vendas->bindParam(':data_abertura', $caixa['data_abertura'], PDO::PARAM_STR);
+        $stmt_vendas->execute();
+        $vendas_hoje = $stmt_vendas->fetch(PDO::FETCH_ASSOC);
+    }
 
-// Verificar status do caixa e buscar vendas do dia
-$stmt_caixa = $pdo->prepare("SELECT * FROM caixa WHERE cnpj_loja = :cnpj_loja ORDER BY id DESC LIMIT 1");
-$stmt_caixa->bindParam(':cnpj_loja', $cnpj_loja, PDO::PARAM_STR);
-$stmt_caixa->execute();
-$caixa = $stmt_caixa->fetch(PDO::FETCH_ASSOC);
-$caixa_aberto = ($caixa && $caixa['status'] == 'aberto');
+    // Total de clientes
+    $stmt_clientes = $pdo->prepare("SELECT COUNT(*) AS total_clientes FROM clientes WHERE id_loja = :id_loja");
+    $stmt_clientes->bindParam(':id_loja', $id_loja, PDO::PARAM_INT);
+    $stmt_clientes->execute();
+    $total_clientes = $stmt_clientes->fetchColumn();
 
-// Vendas do dia (só mostra se o caixa estiver aberto)
-$vendas = ['total_vendas' => 0, 'total_pedidos' => 0];
-if ($caixa_aberto) {
-    $stmt_vendas = $pdo->prepare("
-        SELECT 
-            COALESCE(SUM(valor_total_venda),0) AS total_vendas, 
-            COUNT(*) AS total_pedidos
-        FROM vendas
-        WHERE cnpj_loja = :cnpj_loja
-          AND DATE(data_hora_venda) = CURDATE()
-          AND status_venda = 'CONCLUIDA'
-          AND data_hora_venda >= :data_abertura
+    // Total de produtos ativos
+    $stmt_produtos = $pdo->prepare("SELECT COUNT(*) AS total_produtos FROM produtos WHERE id_loja = :id_loja AND ativo = 1");
+    $stmt_produtos->bindParam(':id_loja', $id_loja, PDO::PARAM_INT);
+    $stmt_produtos->execute();
+    $total_produtos_ativos = $stmt_produtos->fetchColumn();
+
+    // Últimas vendas
+    $stmt_ultimas = $pdo->prepare("
+        SELECT v.id_venda, v.data_hora_venda, v.valor_total_venda, 
+               COALESCE(c.nome_razao_social, 'Consumidor Final') AS cliente,
+               v.status_venda
+        FROM vendas v
+        LEFT JOIN clientes c ON v.id_cliente = c.id_cliente
+        WHERE v.cnpj_loja = :cnpj_loja
+        ORDER BY v.data_hora_venda DESC
+        LIMIT 5
     ");
-    $stmt_vendas->bindParam(':cnpj_loja', $cnpj_loja, PDO::PARAM_STR);
-    $stmt_vendas->bindParam(':data_abertura', $caixa['data_abertura'], PDO::PARAM_STR);
-    $stmt_vendas->execute();
-    $vendas = $stmt_vendas->fetch(PDO::FETCH_ASSOC);
+    $stmt_ultimas->bindParam(':cnpj_loja', $cnpj_loja, PDO::PARAM_STR);
+    $stmt_ultimas->execute();
+    $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Erro ao buscar dados do dashboard: " . $e->getMessage());
 }
-
-// Clientes cadastrados
-$stmt_clientes = $pdo->prepare("SELECT COUNT(*) AS total_clientes FROM clientes WHERE id_loja = :id_loja");
-$stmt_clientes->bindParam(':id_loja', $id_loja, PDO::PARAM_INT);
-$stmt_clientes->execute();
-$clientes_count = $stmt_clientes->fetch(PDO::FETCH_ASSOC);
-
-// Produtos cadastrados
-$stmt_produtos = $pdo->prepare("SELECT COUNT(*) AS total_produtos FROM produtos WHERE id_loja = :id_loja AND ativo = 1");
-$stmt_produtos->bindParam(':id_loja', $id_loja, PDO::PARAM_INT);
-$stmt_produtos->execute();
-$produtos_count = $stmt_produtos->fetch(PDO::FETCH_ASSOC);
-
-// Últimas vendas
-$stmt_ultimas = $pdo->prepare("
-    SELECT v.id_venda, v.data_hora_venda, v.valor_total_venda, 
-           COALESCE(c.nome_razao_social, 'Consumidor Final') AS cliente,
-           v.status_venda
-    FROM vendas v
-    LEFT JOIN clientes c ON v.id_cliente = c.id_cliente
-    WHERE v.cnpj_loja = :cnpj_loja
-    ORDER BY v.data_hora_venda DESC
-    LIMIT 5
-");
-$stmt_ultimas->bindParam(':cnpj_loja', $cnpj_loja, PDO::PARAM_STR);
-$stmt_ultimas->execute();
-$ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
 ?>
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - Davi Sistemas</title>
+    <title>Dashboard - <?= htmlspecialchars($nome_loja) ?></title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --primary: #4a6bff;
@@ -992,7 +917,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
         
         .section-title {
             font-size: 1.4rem;
-            color: var(--dark);
+            color: var(--gray-900);
             font-weight: 600;
         }
         
@@ -1010,7 +935,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
         }
         
         .generate-report:hover {
-            background: #3a5be0;
+            background: var(--primary-dark);
             transform: translateY(-2px);
         }
         
@@ -1049,7 +974,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
         .report-card h3 {
             font-size: 18px;
             margin-bottom: 10px;
-            color: var(--dark);
+            color: var(--gray-900);
         }
         
         .report-card p {
@@ -1074,42 +999,54 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
             margin-top: 15px;
         }
         
-        .sales-table th, .sales-table td {
+        .sales-table th {
+            background: var(--primary);
+            color: white;
             padding: 12px 15px;
             text-align: left;
+            position: sticky;
+            top: 0;
+        }
+        
+        .sales-table td {
+            padding: 10px 15px;
             border-bottom: 1px solid #eee;
         }
         
-        .sales-table th {
-            background: #f8f9fa;
-            font-weight: 500;
-            color: #495057;
+        .sales-table tr:nth-child(even) {
+            background-color: #f8f9fa;
         }
         
         .sales-table tr:hover {
-            background: #f8f9fa;
+            background-color: #eef2ff;
         }
         
         .status-badge {
             padding: 5px 12px;
             border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 500;
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: inline-block;
+            min-width: 100px;
+            text-align: center;
         }
         
-        .status-completed {
+        .status-CONCLUIDA {
             background: #d4edda;
             color: #155724;
+            border: 1px solid #c3e6cb;
         }
         
-        .status-pending {
+        .status-EM_ABERTO {
             background: #fff3cd;
             color: #856404;
+            border: 1px solid #ffeeba;
         }
         
-        .status-cancelled {
+        .status-CANCELADA {
             background: #f8d7da;
             color: #721c24;
+            border: 1px solid #f5c6cb;
         }
         
         /* Seções Dinâmicas */
@@ -1140,6 +1077,13 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
             border: 1px solid #ddd;
             border-radius: 8px;
             font-size: 16px;
+            transition: var(--transition);
+        }
+        
+        .pesquisa-input:focus {
+            border-color: var(--primary);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(74, 107, 255, 0.1);
         }
         
         .btn {
@@ -1157,8 +1101,9 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
         }
         
         .btn:hover {
-            background: #3a5be0;
+            background: var(--primary-dark);
             transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
         }
         
         .btn i {
@@ -1170,7 +1115,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
         }
         
         .btn-success:hover {
-            background: #218838;
+            background: var(--success-dark);
         }
         
         /* Tabelas de dados */
@@ -1178,68 +1123,66 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
             width: 100%;
             border-collapse: collapse;
             margin-top: 20px;
-        }
-        
-        .dados-table th, .dados-table td {
-            padding: 12px 15px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
         
         .dados-table th {
-            background: #f8f9fa;
-            font-weight: 500;
-            color: #495057;
+            background: var(--primary);
+            color: white;
+            padding: 12px 15px;
+            text-align: left;
+            position: sticky;
+            top: 0;
+        }
+        
+        .dados-table td {
+            padding: 10px 15px;
+            border-bottom: 1px solid #eee;
+            vertical-align: middle;
+        }
+        
+        .dados-table tr:nth-child(even) {
+            background-color: #f8f9fa;
         }
         
         .dados-table tr:hover {
-            background: #f8f9fa;
+            background-color: #eef2ff;
         }
         
-        /* ==================== */
-        /* BOTÕES DE AÇÃO (NOVO) */
-        /* ==================== */
-        .acao-btn {
-            background: none;
-            border: none;
-            padding: 5px 10px;
-            cursor: pointer;
-            font-size: 16px;
-            transition: all 0.3s;
+        /* Botões de ação */
+        .btn-action {
+            padding: 6px 12px;
             border-radius: 4px;
-            color: #666;
-            margin: 0 3px;
-        }
-
-        .acao-btn:hover {
-            background: #f0f0f0;
-            transform: scale(1.1);
-            color: var(--primary);
-        }
-
-        /* Botão de excluir específico */
-        .acao-btn[title="Excluir"] {
-            color: var(--danger);
-        }
-
-        .acao-btn[title="Excluir"]:hover {
-            background: #ffe6e6;
-            color: #c82333;
-        }
-
-        /* Efeito ao clicar */
-        .acao-btn:active {
-            transform: scale(0.95);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            display: inline-flex;
+            align-items: center;
         }
         
-        /* Para ícones dentro dos botões */
-        .acao-btn i {
-            transition: transform 0.2s;
+        .btn-edit {
+            background: var(--info);
+            color: white;
         }
-        .acao-btn:hover i {
-            transform: scale(1.2);
+        
+        .btn-edit:hover {
+            background: var(--info-dark);
         }
-
+        
+        .btn-delete {
+            background: var(--danger);
+            color: white;
+        }
+        
+        .btn-delete:hover {
+            background: var(--danger-dark);
+        }
+        
+        .btn-action i {
+            margin-right: 5px;
+        }
+        
         /* Modal */
         .modal-overlay {
             position: fixed;
@@ -1277,7 +1220,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
         
         .modal-title {
             font-size: 1.5rem;
-            color: var(--dark);
+            color: var(--gray-900);
             font-weight: 600;
         }
         
@@ -1316,6 +1259,13 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
             border: 1px solid #ddd;
             border-radius: 8px;
             font-size: 16px;
+            transition: var(--transition);
+        }
+        
+        .form-control:focus {
+            border-color: var(--primary);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(74, 107, 255, 0.1);
         }
         
         .form-row {
@@ -1339,6 +1289,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
         
         .btn-cancel {
             background: #6c757d;
+            color: white;
         }
         
         .btn-cancel:hover {
@@ -1410,6 +1361,9 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
             margin-bottom: 20px;
             font-size: 18px;
             color: #555;
+            background: #f5f7ff;
+            padding: 10px;
+            border-radius: 8px;
         }
         
         .relatorio-tabela {
@@ -1649,90 +1603,50 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
             .pesquisa-container {
                 flex-direction: column;
             }
-
-            /* ADICIONEI: ESTILOS PARA STATUS DE VENDA */
-        .status-badge {
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 0.85rem;
-            font-weight: 600;
         }
         
-        .status-CONCLUIDA {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        
-        .status-EM_ABERTO {
-            background: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeeba;
-        }
-        
-        .status-CANCELADA {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+        @media (max-width: 576px) {
+            .dados-table {
+                display: block;
+                overflow-x: auto;
+                white-space: nowrap;
+            }
+            
+            .modal {
+                width: 95%;
+                max-width: none;
+            }
         }
 
-        /* ADICIONEI: MELHORIAS NA TABELA */
-        .sales-table th {
-            background: #4a6bff;
-            color: white;
-        }
-        
-        .sales-table tr:nth-child(even) {
-            background-color: #f8f9fa;
-        }
-        
-        .sales-table tr:hover {
-            background-color: #eef2ff;
-        }
-        
-        /* ADICIONEI: ESTILO PARA BOTÕES DE AÇÃO */
-        .btn-action {
-            padding: 6px 12px;
-            border-radius: 4px;
-            font-size: 14px;
-            cursor: pointer;
-            transition: all 0.2s;
-            border: none;
-            display: inline-flex;
-            align-items: center;
-        }
-        
-        .btn-edit {
-            background: #3b82f6;
-            color: white;
-        }
-        
-        .btn-edit:hover {
-            background: #2563eb;
-        }
-        
-        .btn-delete {
-            background: #ef4444;
-            color: white;
-        }
-        
-        .btn-delete:hover {
-            background: #dc2626;
-        }
-        
-        .btn-action i {
-            margin-right: 5px;
-        }
-        }
+        .logo img {
+    max-height: 80px;
+    max-width: 100%;
+    object-fit: contain;
+    margin-bottom: 10px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+.modal-body img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    margin: 10px 0;
+}
     </style>
 </head>
 <body>
     <!-- Sidebar -->
     <div class="sidebar">
         <div class="logo">
-            <i class="fas fa-store-alt fa-2x" style="color: var(--primary);"></i>
-            <h2>Davi Sistemas</h2>
-        </div>
+    <?php if($logo_loja): ?>
+        <img src="uploads/logos/<?= htmlspecialchars($logo_loja) ?>" 
+             style="max-height: 80px; margin-bottom: 10px;">
+    <?php else: ?>
+        <i class="fas fa-store-alt fa-2x"></i>
+    <?php endif; ?>
+    <h2><?= htmlspecialchars($nome_loja) ?></h2>
+</div>
         
         <div class="nav-menu">
             <a href="?secao=dashboard" class="nav-item <?= $secao_ativa == 'dashboard' ? 'active' : '' ?>">
@@ -1747,22 +1661,19 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                 <i class="fas fa-box-open"></i>
                 <span>Produtos</span>
             </a>
+            <a href="etiquetas.php" class="nav-item">
+                <i class="fas fa-tags"></i>
+                <span>Etiquetas</span>
+            </a>
             <a href="?secao=clientes" class="nav-item <?= $secao_ativa == 'clientes' ? 'active' : '' ?>">
                 <i class="fas fa-users"></i>
                 <span>Clientes</span>
             </a>
-            <a href="?secao=nfce" class="nav-item <?= $secao_ativa == 'nfce' ? 'active' : '' ?>">
-                <i class="fas fa-file-invoice-dollar"></i>
-                <span>NFC-e</span>
-            </a>
-            <a href="?secao=relatorios" class="nav-item <?= $secao_ativa == 'relatorios' ? 'active' : '' ?>">
-                <i class="fas fa-chart-line"></i>
-                <span>Relatórios</span>
-            </a>
-            <a href="?secao=configuracoes" class="nav-item <?= $secao_ativa == 'configuracoes' ? 'active' : '' ?>">
-                <i class="fas fa-cog"></i>
-                <span>Configurações</span>
-            </a>
+
+        <a href="#" onclick="abrirModalLogo(); return false;" class="nav-item">
+    <i class="fas fa-image"></i>
+    <span>Adicionar Logo</span>
+</a>
         </div>
     </div>
     
@@ -1770,9 +1681,9 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
     <div class="main-content">
         <div class="topbar animated">
             <div class="info">
-                Usuário: <strong><?php echo htmlspecialchars($usuario); ?></strong> | 
-                CNPJ: <strong><?php echo htmlspecialchars($cnpj_loja); ?></strong> | 
-                Loja: <strong><?php echo htmlspecialchars($nome_loja); ?></strong>
+                Usuário: <strong><?= htmlspecialchars($usuario) ?></strong> | 
+                CNPJ: <strong><?= htmlspecialchars($cnpj_loja) ?></strong> | 
+                Loja: <strong><?= htmlspecialchars($nome_loja) ?></strong>
             </div>
             <form action="login.php" method="post" style="margin:0;">
                 <button type="submit" class="logout-btn">
@@ -1798,38 +1709,28 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                     <i class="fas fa-check-circle"></i>
                     <span>Produto excluído com sucesso!</span>
                 </div>
+            <?php elseif($_GET['msg'] == 'cliente_ok'): ?>
+                <div class="mensagem mensagem-sucesso animated">
+                    <i class="fas fa-check-circle"></i>
+                    <span>Cliente cadastrado com sucesso!</span>
+                </div>
+            <?php elseif($_GET['msg'] == 'cliente_atualizado'): ?>
+                <div class="mensagem mensagem-sucesso animated">
+                    <i class="fas fa-check-circle"></i>
+                    <span>Cliente atualizado com sucesso!</span>
+                </div>
+            <?php elseif($_GET['msg'] == 'cliente_excluido'): ?>
+                <div class="mensagem mensagem-sucesso animated">
+                    <i class="fas fa-check-circle"></i>
+                    <span>Cliente excluído com sucesso!</span>
+                </div>
             <?php endif; ?>
         <?php endif; ?>
         
         <?php if(!empty($erro_produto)): ?>
             <div class="mensagem mensagem-erro animated">
                 <i class="fas fa-exclamation-circle"></i>
-                <span><?php echo htmlspecialchars($erro_produto); ?></span>
-            </div>
-        <?php endif; ?>
-        
-        <?php if(!empty($erro_relatorio)): ?>
-            <div class="mensagem mensagem-erro animated">
-                <i class="fas fa-exclamation-circle"></i>
-                <span><?php echo htmlspecialchars($erro_relatorio); ?></span>
-            </div>
-        <?php endif; ?>
-
-                <!-- ADICIONEI: MENSAGENS PARA CLIENTES -->
-        <?php if(isset($_GET['msg']) && $_GET['msg'] == 'cliente_ok'): ?>
-            <div class="mensagem mensagem-sucesso animated">
-                <i class="fas fa-check-circle"></i>
-                <span>Cliente cadastrado com sucesso!</span>
-            </div>
-        <?php elseif(isset($_GET['msg']) && $_GET['msg'] == 'cliente_atualizado'): ?>
-            <div class="mensagem mensagem-sucesso animated">
-                <i class="fas fa-check-circle"></i>
-                <span>Cliente atualizado com sucesso!</span>
-            </div>
-        <?php elseif(isset($_GET['msg']) && $_GET['msg'] == 'cliente_excluido'): ?>
-            <div class="mensagem mensagem-sucesso animated">
-                <i class="fas fa-check-circle"></i>
-                <span>Cliente excluído com sucesso!</span>
+                <span><?= htmlspecialchars($erro_produto) ?></span>
             </div>
         <?php endif; ?>
         
@@ -1839,7 +1740,13 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                 <span><?= htmlspecialchars($erro_cliente) ?></span>
             </div>
         <?php endif; ?>
-
+        
+        <?php if(!empty($erro_relatorio)): ?>
+            <div class="mensagem mensagem-erro animated">
+                <i class="fas fa-exclamation-circle"></i>
+                <span><?= htmlspecialchars($erro_relatorio) ?></span>
+            </div>
+        <?php endif; ?>
         
         <!-- Dashboard -->
         <div class="secao-conteudo <?= $secao_ativa == 'dashboard' ? 'ativa' : '' ?>" id="dashboard">
@@ -1847,10 +1754,10 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                 <div class="card sales animated delay-1">
                     <div class="card-content">
                         <div class="title">Vendas de Hoje</div>
-                        <div class="value">R$ <?php echo number_format($vendas['total_vendas'] ?? 0, 2, ',', '.'); ?></div>
-                        <div class="desc">Pedidos: <?php echo $vendas['total_pedidos'] ?? 0; ?></div>
+                        <div class="value">R$ <?= number_format($vendas_hoje['total_vendas'] ?? 0, 2, ',', '.') ?></div>
+                        <div class="desc">Pedidos: <?= $vendas_hoje['total_pedidos'] ?? 0 ?></div>
                         <div class="trend">
-                            <?php if(($vendas['total_pedidos'] ?? 0) > 0): ?>
+                            <?php if(($vendas_hoje['total_pedidos'] ?? 0) > 0): ?>
                                 <i class="fas fa-arrow-up"></i> Hoje
                             <?php else: ?>
                                 <i class="fas fa-clock"></i> <?= $caixa_aberto ? 'Sem vendas hoje' : 'Caixa fechado' ?>
@@ -1862,7 +1769,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                 <div class="card clients animated delay-2">
                     <div class="card-content">
                         <div class="title">Clientes Cadastrados</div>
-                        <div class="value"><?php echo $clientes_count['total_clientes'] ?? 0; ?></div>
+                        <div class="value"><?= $total_clientes ?></div>
                         <div class="desc">Total de clientes da loja</div>
                         <div class="trend">
                             <i class="fas fa-user-plus"></i> Registrados
@@ -1873,7 +1780,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                 <div class="card products animated delay-3">
                     <div class="card-content">
                         <div class="title">Produtos em Estoque</div>
-                        <div class="value"><?php echo $produtos_count['total_produtos'] ?? 0; ?></div>
+                        <div class="value"><?= $total_produtos_ativos ?></div>
                         <div class="desc">Itens cadastrados</div>
                         <div class="trend">
                             <i class="fas fa-box"></i> Disponíveis
@@ -1917,7 +1824,6 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                 </div>
             </div>
             
-            <!-- ADICIONEI: MELHORIAS NA TABELA DE ÚLTIMAS VENDAS -->
             <div class="recent-sales animated delay-3">
                 <div class="section-header">
                     <h2 class="section-title">Últimas Vendas</h2>
@@ -1951,9 +1857,11 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                                         <button class="btn-action btn-edit" title="Ver detalhes">
                                             <i class="fas fa-eye"></i>
                                         </button>
-                                        <button class="btn-action btn-delete" title="Cancelar venda">
-                                            <i class="fas fa-times"></i>
-                                        </button>
+                                        <?php if($venda['status_venda'] == 'EM_ABERTO'): ?>
+                                            <button class="btn-action btn-delete" title="Cancelar venda">
+                                                <i class="fas fa-times"></i>
+                                            </button>
+                                        <?php endif; ?>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -1971,9 +1879,9 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
         <div class="secao-conteudo <?= $secao_ativa == 'produtos' ? 'ativa' : '' ?>" id="produtos">
             <div class="section-header">
                 <h2 class="section-title">Gerenciamento de Produtos</h2>
-                <button class="btn btn-success" onclick="abrirModalProduto()">
-                    <i class="fas fa-plus"></i> Cadastrar Produto
-                </button>
+<button class="btn btn-success" onclick="abrirModalProduto(); return false;">
+    <i class="fas fa-plus"></i> Cadastrar Produto
+</button>
             </div>
             
             <form method="get" class="pesquisa-container">
@@ -2005,7 +1913,9 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                             <tr>
                                 <td>
                                     <?php if (!empty($produto['foto_produto'])): ?>
-                                        <img src="uploads/imagens/<?= htmlspecialchars($produto['foto_produto']) ?>" style="max-width:60px;max-height:60px;border-radius:6px;">
+                                        <img src="uploads/imagens/<?= htmlspecialchars($produto['foto_produto']) ?>" 
+                                             style="max-width:60px;max-height:60px;border-radius:6px;" 
+                                             alt="<?= htmlspecialchars($produto['nome_produto']) ?>">
                                     <?php else: ?>
                                         <span style="color:#aaa;">Sem foto</span>
                                     <?php endif; ?>
@@ -2017,10 +1927,14 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                                 <td><?= htmlspecialchars($produto['ncm'] ?? '') ?></td>
                                 <td><?= number_format($produto['ibpt'] ?? 0, 2, ',', '.') ?>%</td>
                                 <td>
-                                    <button class="acao-btn" onclick="editarProduto(<?= $produto['id_produto'] ?>)" title="Editar">
+                                    <button class="btn-action btn-edit" 
+                                            onclick="editarProduto(<?= $produto['id_produto'] ?>)"
+                                            title="Editar">
                                         <i class="fas fa-edit"></i>
                                     </button>
-                                    <button class="acao-btn" onclick="excluirProduto(<?= $produto['id_produto'] ?>)" title="Excluir">
+                                    <button class="btn-action btn-delete" 
+                                            onclick="confirmarExclusao(<?= $produto['id_produto'] ?>, 'produto')"
+                                            title="Excluir">
                                         <i class="fas fa-trash"></i>
                                     </button>
                                 </td>
@@ -2056,7 +1970,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
         </div>
         
         <!-- Seção de Clientes -->
-         <div class="secao-conteudo <?= $secao_ativa == 'clientes' ? 'ativa' : '' ?>" id="clientes">
+        <div class="secao-conteudo <?= $secao_ativa == 'clientes' ? 'ativa' : '' ?>" id="clientes">
             <div class="section-header">
                 <h2 class="section-title">Gerenciamento de Clientes</h2>
                 <button class="btn btn-success" onclick="abrirModalCliente()">
@@ -2099,7 +2013,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                                         <i class="fas fa-edit"></i>
                                     </button>
                                     <button class="btn-action btn-delete" 
-                                            onclick="excluirCliente(<?= $cliente['id_cliente'] ?>)"
+                                            onclick="confirmarExclusao(<?= $cliente['id_cliente'] ?>, 'cliente')"
                                             title="Excluir">
                                         <i class="fas fa-trash"></i>
                                     </button>
@@ -2113,28 +2027,6 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                     <?php endif; ?>
                 </tbody>
             </table>
-        </div>
-        
-        <!-- Outras seções (NFC-e, Relatórios, Configurações) -->
-        <div class="secao-conteudo <?= $secao_ativa == 'nfce' ? 'ativa' : '' ?>" id="nfce">
-            <div class="section-header">
-                <h2 class="section-title">Gerenciamento de NFC-e</h2>
-            </div>
-            <p>Seção para gerenciamento de notas fiscais eletrônicas.</p>
-        </div>
-        
-        <div class="secao-conteudo <?= $secao_ativa == 'relatorios' ? 'ativa' : '' ?>" id="relatorios">
-            <div class="section-header">
-                <h2 class="section-title">Relatórios</h2>
-            </div>
-            <p>Seção para geração de relatórios.</p>
-        </div>
-        
-        <div class="secao-conteudo <?= $secao_ativa == 'configuracoes' ? 'ativa' : '' ?>" id="configuracoes">
-            <div class="section-header">
-                <h2 class="section-title">Configurações</h2>
-            </div>
-            <p>Seção para configurações do sistema.</p>
         </div>
     </div>
     
@@ -2180,7 +2072,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                         <div class="form-col">
                             <div class="form-group">
                                 <label class="form-label">Estoque Atual *</label>
-                                <input type="number" name="estoque" id="estoque" class="form-control" step="0.001" min="0" required>
+                                <input type="number" name="estoque" id="estoque" class="form-control" step="1" min="0" required>
                             </div>
                         </div>
                     </div>
@@ -2225,7 +2117,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                         <label class="form-label">Foto do Produto</label>
                         <input type="file" name="foto_produto" id="foto_produto" class="form-control" accept="image/*">
                     </div>
-                    <!-- Preview da imagem atual (aparece só se tiver imagem) -->
+                    
                     <div class="form-group" id="imagemPreviewContainer" style="display:none;">
                         <label class="form-label">Imagem Atual:</label><br>
                         <img id="imagemPreview" src="" alt="Foto do Produto" style="max-width:250px;max-height:250px;border-radius:8px;border:1px solid #ccc;">
@@ -2241,7 +2133,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
     </div>
     
     <!-- Modal de Cliente -->
-<div class="modal-overlay" id="modalCliente">
+    <div class="modal-overlay" id="modalCliente">
         <div class="modal">
             <div class="modal-header">
                 <h3 class="modal-title"><?= $cliente_editar ? 'Editar Cliente' : 'Cadastrar Cliente' ?></h3>
@@ -2427,6 +2319,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                                     <th>Data/Hora</th>
                                     <th>Cliente</th>
                                     <th>Valor</th>
+                                    <th>Forma Pagamento</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -2436,6 +2329,7 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
                                         <td><?= date('d/m/Y H:i', strtotime($venda['data_hora_venda'])) ?></td>
                                         <td><?= htmlspecialchars($venda['nome_razao_social'] ?? 'Consumidor Final') ?></td>
                                         <td>R$ <?= number_format($venda['valor_total_venda'], 2, ',', '.') ?></td>
+                                        <td><?= htmlspecialchars($venda['formas_pagamento'] ?? 'Não informado') ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -2480,290 +2374,349 @@ $ultimas_vendas = $stmt_ultimas->fetchAll(PDO::FETCH_ASSOC);
     </div>
 
     <!-- Modal de Confirmação -->
-<div class="modal-overlay" id="modalConfirmacao">
-    <div class="modal" style="max-width: 400px;">
+    <div class="modal-overlay" id="modalConfirmacao">
+        <div class="modal" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3 class="modal-title">Confirmação</h3>
+                <button class="modal-close" onclick="fecharModalConfirmacao()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="mensagemConfirmacao" style="text-align: center; font-size: 16px; margin-bottom: 20px;"></p>
+                <div style="display: flex; justify-content: center; gap: 15px;">
+                    <button onclick="confirmarAcao()" class="btn btn-success" style="min-width: 80px;">Sim</button>
+                    <button onclick="fecharModalConfirmacao()" class="btn btn-cancel" style="min-width: 80px;">Não</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para upload da logo -->
+<div class="modal-overlay" id="modalLogo">
+    <div class="modal">
         <div class="modal-header">
-            <h3 class="modal-title">Confirmação</h3>
-            <button class="modal-close" onclick="fecharModalConfirmacao()">&times;</button>
+            <h3>Adicionar Logo</h3>
+            <button onclick="fecharModalLogo()">&times;</button>
         </div>
         <div class="modal-body">
-            <p id="mensagemConfirmacao" style="text-align: center; font-size: 16px; margin-bottom: 20px;"></p>
-            <div style="display: flex; justify-content: center; gap: 15px;">
-                <button onclick="confirmarAcao()" class="btn btn-success" style="min-width: 80px;">Sim</button>
-                <button onclick="fecharModalConfirmacao()" class="btn btn-cancel" style="min-width: 80px;">Não</button>
-            </div>
+            <form method="post" enctype="multipart/form-data">
+                <input type="hidden" name="upload_logo" value="1">
+                <input type="file" name="logo" accept="image/*" required>
+                <button type="submit">Salvar</button>
+            </form>
         </div>
     </div>
 </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-<script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/pt.js"></script>
 <script>
-    // Inicializar datepickers
-    document.addEventListener('DOMContentLoaded', function() {
-        flatpickr("#data_inicio", {
-            dateFormat: "Y-m-d",
-            locale: "pt",
-            defaultDate: "<?= date('Y-m-01') ?>"
-        });
+function abrirModalLogo() {
+    document.getElementById('modalLogo').style.display = 'flex';
+}
+function fecharModalLogo() {
+    document.getElementById('modalLogo').style.display = 'none';
+}
+</script>
+
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/pt.js"></script>
+    <script>
+        // Variáveis globais
+        let idParaExcluir = null;
+        let tipoExclusao = null;
+        let acaoConfirmada = false;
         
-        flatpickr("#data_fim", {
-            dateFormat: "Y-m-d",
-            locale: "pt",
-            defaultDate: "<?= date('Y-m-t') ?>"
+        // Inicializar datepickers
+        document.addEventListener('DOMContentLoaded', function() {
+            flatpickr("#data_inicio", {
+                dateFormat: "Y-m-d",
+                locale: "pt",
+                defaultDate: "<?= date('Y-m-01') ?>"
+            });
+            
+            flatpickr("#data_fim", {
+                dateFormat: "Y-m-d",
+                locale: "pt",
+                defaultDate: "<?= date('Y-m-t') ?>"
+            });
+
+            // Iniciar funções de atualização
+            atualizarVendas();
+            atualizarEstoque();
+            setInterval(atualizarVendas, 30000);
+            setInterval(atualizarEstoque, 10000);
+            
+            // Preencher formulário se estiver editando
+            <?php if(isset($produto_editar)): ?>
+                abrirModalProduto();
+                document.getElementById('modalProdutoTitulo').textContent = 'Editar Produto';
+                document.getElementById('id_produto').value = '<?= $produto_editar['id_produto'] ?>';
+                document.getElementById('referencia').value = '<?= $produto_editar['referencia_interna'] ?>';
+                document.getElementById('nome').value = '<?= $produto_editar['nome_produto'] ?>';
+                document.getElementById('descricao').value = '<?= $produto_editar['descricao'] ?? '' ?>';
+                document.getElementById('preco').value = '<?= $produto_editar['preco_venda'] ?>';
+                document.getElementById('estoque').value = '<?= $produto_editar['estoque_atual'] ?>';
+                document.getElementById('codigo_barras').value = '<?= $produto_editar['codigo_barras_ean'] ?? '' ?>';
+                document.getElementById('unidade_medida').value = '<?= $produto_editar['unidade_medida'] ?>';
+                document.getElementById('ncm').value = '<?= $produto_editar['ncm'] ?? '01012100' ?>';
+                document.getElementById('ibpt').value = '<?= $produto_editar['ibpt'] ?? '4.20' ?>';
+                document.getElementById('acao_produto').name = 'editar_produto';
+
+                <?php if(!empty($produto_editar['foto_produto'])): ?>
+                    document.getElementById('imagemPreviewContainer').style.display = 'block';
+                    document.getElementById('imagemPreview').src = 'uploads/imagens/<?= $produto_editar['foto_produto'] ?>';
+                <?php endif; ?>
+            <?php endif; ?>
+            
+            // Abrir modal de cliente se estiver editando
+            <?php if(isset($cliente_editar)): ?>
+                abrirModalCliente();
+            <?php endif; ?>
+            
+            // Abrir modal de relatório se houver dados
+            <?php if(!empty($relatorio_data)): ?>
+                abrirModalRelatorio();
+            <?php endif; ?>
         });
 
-        // Iniciar funções de atualização
-        atualizarVendas();
-        atualizarEstoque();
-        setInterval(atualizarVendas, 30000);
-        setInterval(atualizarEstoque, 10000);
-    });
-
-    // Funções para abrir/fechar modais
-    function abrirModalProduto() {
-        document.getElementById('modalProduto').style.display = 'flex';
-        document.getElementById('modalProdutoTitulo').textContent = 'Cadastrar Produto';
-        document.getElementById('formProduto').reset();
-        document.getElementById('acao_produto').value = '1';
-        document.getElementById('id_produto').value = '';
-        document.getElementById('imagemPreviewContainer').style.display = 'none';
-        document.getElementById('ncm').value = '01012100';
-        document.getElementById('ibpt').value = '4.20';
-    }
-
-    function fecharModalProduto() {
-        document.getElementById('modalProduto').style.display = 'none';
-    }
-
-    function abrirModalCliente() {
-        document.getElementById('modalCliente').style.display = 'flex';
-    }
-
-    function fecharModalCliente() {
-        document.getElementById('modalCliente').style.display = 'none';
-    }
+        // Funções para abrir/fechar modais
+        function abrirModalProduto() {
+    // Resetar o formulário antes de abrir
+    document.getElementById('formProduto').reset();
+    document.getElementById('modalProdutoTitulo').textContent = 'Cadastrar Produto';
+    document.getElementById('acao_produto').name = 'cadastro_produto';
+    document.getElementById('id_produto').value = '';
+    document.getElementById('imagemPreviewContainer').style.display = 'none';
     
-    function abrirModalPeriodo() {
-        document.getElementById('modalPeriodo').style.display = 'flex';
-    }
-    
-    function fecharModalPeriodo() {
-        document.getElementById('modalPeriodo').style.display = 'none';
-    }
-    
-    function abrirModalRelatorio() {
-        document.getElementById('modalRelatorio').style.display = 'flex';
-    }
-    
-    function fecharModalRelatorio() {
-        document.getElementById('modalRelatorio').style.display = 'none';
-    }
-    
-    function imprimirRelatorio() {
-        window.print();
-    }
-    
-    // Editar produto
-    function editarProduto(id) {
-        window.location.href = `dashboard.php?secao=produtos&editar_produto=${id}`;
-    }
+    // Abrir o modal
+    document.getElementById('modalProduto').style.display = 'flex';
+}
 
-    // Controle de confirmação para exclusão
-    let acaoConfirmada = false;
-    let idParaExcluir = null;
-
-    function excluirProduto(id) {
-        idParaExcluir = id;
-        document.getElementById('mensagemConfirmacao').textContent = 'Tem certeza que deseja excluir este produto?';
-        document.getElementById('modalConfirmacao').style.display = 'flex';
+        function fecharModalProduto() {
+    // Resetar o formulário
+    document.getElementById('formProduto').reset();
+    
+    // Resetar o título e modo do modal
+    document.getElementById('modalProdutoTitulo').textContent = 'Cadastrar Produto';
+    document.getElementById('acao_produto').name = 'cadastro_produto';
+    document.getElementById('id_produto').value = '';
+    
+    // Esconder a pré-visualização da imagem
+    document.getElementById('imagemPreviewContainer').style.display = 'none';
+    
+    // Fechar o modal
+    document.getElementById('modalProduto').style.display = 'none';
+    
+    // Remover o parâmetro de edição da URL
+    if (window.location.search.includes('editar_produto')) {
+        const url = new URL(window.location);
+        url.searchParams.delete('editar_produto');
+        window.history.replaceState({}, '', url);
     }
+}
 
-    function confirmarAcao() {
-        acaoConfirmada = true;
-        fecharModalConfirmacao();
-        window.location.href = `dashboard.php?secao=produtos&excluir_produto=${idParaExcluir}`;
-    }
-
-    function fecharModalConfirmacao() {
-        if (!acaoConfirmada) {
-            idParaExcluir = null;
+        function abrirModalCliente() {
+            document.getElementById('modalCliente').style.display = 'flex';
         }
-        document.getElementById('modalConfirmacao').style.display = 'none';
-    }
 
-    // Gerar relatório rápido
-    function gerarRelatorioRapido(tipo) {
-        const hoje = new Date();
-        let dataInicio, dataFim;
-        
-        switch(tipo) {
-            case 'hoje':
-                dataInicio = dataFim = formatarData(hoje);
-                break;
-            case 'semana':
-                dataInicio = new Date(hoje);
-                dataInicio.setDate(hoje.getDate() - 7);
-                dataInicio = formatarData(dataInicio);
-                dataFim = formatarData(hoje);
-                break;
-            case 'mes':
-                dataInicio = formatarData(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
-                dataFim = formatarData(new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0));
-                break;
-            default:
-                console.error('Tipo de relatório não reconhecido');
-                return;
+        function fecharModalCliente() {
+            document.getElementById('modalCliente').style.display = 'none';
         }
         
-        document.getElementById('data_inicio').value = dataInicio;
-        document.getElementById('data_fim').value = dataFim;
-        document.getElementById('formPeriodo').submit();
-    }
-    
-    function formatarData(data) {
-        return data.toISOString().split('T')[0];
-    }
+        function abrirModalPeriodo() {
+            document.getElementById('modalPeriodo').style.display = 'flex';
+        }
+        
+        function fecharModalPeriodo() {
+            document.getElementById('modalPeriodo').style.display = 'none';
+        }
+        
+        function abrirModalRelatorio() {
+            document.getElementById('modalRelatorio').style.display = 'flex';
+        }
+        
+        function fecharModalRelatorio() {
+            document.getElementById('modalRelatorio').style.display = 'none';
+        }
+        
+        function imprimirRelatorio() {
+            window.print();
+        }
+        
+        // Funções de edição
+        function editarProduto(id) {
+            window.location.href = `dashboard.php?secao=produtos&editar_produto=${id}`;
+        }
+        
+        function editarCliente(id) {
+            window.location.href = `dashboard.php?secao=clientes&editar_cliente=${id}`;
+        }
+        
+        // Funções de confirmação para exclusão
+        function confirmarExclusao(id, tipo) {
+            idParaExcluir = id;
+            tipoExclusao = tipo;
+            document.getElementById('mensagemConfirmacao').textContent = `Tem certeza que deseja excluir este ${tipo}?`;
+            document.getElementById('modalConfirmacao').style.display = 'flex';
+        }
+        
+        function confirmarAcao() {
+            acaoConfirmada = true;
+            fecharModalConfirmacao();
+            
+            if (tipoExclusao === 'produto') {
+                window.location.href = `dashboard.php?secao=produtos&excluir_produto=${idParaExcluir}`;
+            } else if (tipoExclusao === 'cliente') {
+                window.location.href = `dashboard.php?secao=clientes&excluir_cliente=${idParaExcluir}`;
+            }
+        }
+        
+        function fecharModalConfirmacao() {
+            if (!acaoConfirmada) {
+                idParaExcluir = null;
+                tipoExclusao = null;
+            }
+            document.getElementById('modalConfirmacao').style.display = 'none';
+        }
+        
+        // Gerar relatório rápido
+        function gerarRelatorioRapido(tipo) {
+            const hoje = new Date();
+            let dataInicio, dataFim;
+            
+            switch(tipo) {
+                case 'hoje':
+                    dataInicio = dataFim = formatarData(hoje);
+                    break;
+                case 'semana':
+                    dataInicio = new Date(hoje);
+                    dataInicio.setDate(hoje.getDate() - 7);
+                    dataInicio = formatarData(dataInicio);
+                    dataFim = formatarData(hoje);
+                    break;
+                case 'mes':
+                    dataInicio = formatarData(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+                    dataFim = formatarData(new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0));
+                    break;
+                default:
+                    console.error('Tipo de relatório não reconhecido');
+                    return;
+            }
+            
+            document.getElementById('data_inicio').value = dataInicio;
+            document.getElementById('data_fim').value = dataFim;
+            document.getElementById('formPeriodo').submit();
+        }
+        
+        function formatarData(data) {
+            return data.toISOString().split('T')[0];
+        }
 
-    // Atualizar estoque em tempo real
-    function atualizarEstoque() {
-        fetch('atualizar_estoque.php')
-            .then(response => {
-                if (!response.ok) throw new Error('Erro na rede');
-                return response.json();
-            })
-            .then(data => {
-                if (data.estoqueAtualizado) {
-                    const rows = document.querySelectorAll('.dados-table tbody tr');
-                    rows.forEach(row => {
-                        const idProduto = row.querySelector('button[onclick^="editarProduto"]')
-                            .getAttribute('onclick')
-                            .match(/\d+/)[0];
-                        
-                        if (data.produtos[idProduto]) {
-                            const estoqueCell = row.querySelector('td:nth-child(5)');
-                            if (estoqueCell) {
-                                estoqueCell.textContent = parseFloat(data.produtos[idProduto].estoque).toFixed(3).replace('.', ',');
+        // Atualizar estoque em tempo real
+        function atualizarEstoque() {
+            fetch('atualizar_estoque.php')
+                .then(response => {
+                    if (!response.ok) throw new Error('Erro na rede');
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.estoqueAtualizado) {
+                        const rows = document.querySelectorAll('.dados-table tbody tr');
+                        rows.forEach(row => {
+                            const idProduto = row.querySelector('button[onclick^="editarProduto"]')
+                                .getAttribute('onclick')
+                                .match(/\d+/)[0];
+                            
+                            if (data.produtos[idProduto]) {
+                                const estoqueCell = row.querySelector('td:nth-child(5)');
+                                if (estoqueCell) {
+                                    estoqueCell.textContent = parseFloat(data.produtos[idProduto].estoque).toFixed(3).replace('.', ',');
+                                }
                             }
-                        }
-                    });
-                }
-            })
-            .catch(error => console.error('Erro ao atualizar estoque:', error));
-    }
+                        });
+                    }
+                })
+                .catch(error => console.error('Erro ao atualizar estoque:', error));
+        }
 
-    // Atualizar vendas periodicamente
-    function atualizarVendas() {
-        fetch('atualizar_vendas.php')
-            .then(response => {
-                if (!response.ok) throw new Error('Erro na rede');
-                return response.json();
-            })
-            .then(data => {
-                if (data.total_vendas !== undefined) {
-                    const salesCard = document.querySelector('.card.sales');
-                    if (salesCard) {
-                        salesCard.querySelector('.value').textContent = 'R$ ' + data.total_vendas.toFixed(2).replace('.', ',');
-                        salesCard.querySelector('.desc').textContent = 'Pedidos: ' + data.total_pedidos;
-                        
-                        const trendElement = salesCard.querySelector('.trend');
-                        if (trendElement) {
-                            if (data.total_pedidos > 0) {
-                                trendElement.innerHTML = '<i class="fas fa-arrow-up"></i> Hoje';
-                            } else {
-                                trendElement.innerHTML = 
-                                    data.caixa_aberto ? '<i class="fas fa-clock"></i> Sem vendas hoje' : '<i class="fas fa-clock"></i> Caixa fechado';
+        // Atualizar vendas periodicamente
+        function atualizarVendas() {
+            fetch('atualizar_vendas.php')
+                .then(response => {
+                    if (!response.ok) throw new Error('Erro na rede');
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.total_vendas !== undefined) {
+                        const salesCard = document.querySelector('.card.sales');
+                        if (salesCard) {
+                            salesCard.querySelector('.value').textContent = 'R$ ' + data.total_vendas.toFixed(2).replace('.', ',');
+                            salesCard.querySelector('.desc').textContent = 'Pedidos: ' + data.total_pedidos;
+                            
+                            const trendElement = salesCard.querySelector('.trend');
+                            if (trendElement) {
+                                if (data.total_pedidos > 0) {
+                                    trendElement.innerHTML = '<i class="fas fa-arrow-up"></i> Hoje';
+                                } else {
+                                    trendElement.innerHTML = 
+                                        data.caixa_aberto ? '<i class="fas fa-clock"></i> Sem vendas hoje' : '<i class="fas fa-clock"></i> Caixa fechado';
+                                }
                             }
                         }
                     }
-                }
-            })
-            .catch(error => console.error('Erro ao atualizar vendas:', error));
-    }
-
-    // Validação do formulário de produto
-    document.addEventListener('DOMContentLoaded', function() {
-        const formProduto = document.getElementById('formProduto');
-        if (formProduto) {
-            formProduto.addEventListener('submit', function(e) {
-                const preco = parseFloat(document.getElementById('preco').value);
-                const estoque = parseFloat(document.getElementById('estoque').value);
-                const ncm = document.getElementById('ncm').value.trim();
-                const ibpt = parseFloat(document.getElementById('ibpt').value);
-                const nome = document.getElementById('nome').value.trim();
-                const referencia = document.getElementById('referencia').value.trim();
-
-                if (isNaN(preco) || preco <= 0) {
-                    alert('O preço deve ser maior que zero');
-                    e.preventDefault();
-                    return;
-                }
-
-                if (isNaN(estoque) || estoque < 0) {
-                    alert('O estoque não pode ser negativo');
-                    e.preventDefault();
-                    return;
-                }
-
-                if (nome === '') {
-                    alert('O nome do produto é obrigatório');
-                    e.preventDefault();
-                    return;
-                }
-
-                if (referencia === '') {
-                    alert('O código de referência é obrigatório');
-                    e.preventDefault();
-                    return;
-                }
-
-                if (ncm === '') {
-                    alert('O NCM é obrigatório');
-                    e.preventDefault();
-                    return;
-                }
-
-                if (isNaN(ibpt) || ibpt < 0) {
-                    alert('A alíquota IBPT deve ser um número positivo');
-                    e.preventDefault();
-                    return;
-                }
-            });
+                })
+                .catch(error => console.error('Erro ao atualizar vendas:', error));
         }
-    });
 
-    // Preencher formulário se estiver editando
-    <?php if(isset($produto_editar)): ?>
-    document.addEventListener('DOMContentLoaded', function() {
-        abrirModalProduto();
-        document.getElementById('modalProdutoTitulo').textContent = 'Editar Produto';
-        document.getElementById('id_produto').value = '<?= $produto_editar['id_produto'] ?>';
-        document.getElementById('referencia').value = '<?= $produto_editar['referencia_interna'] ?>';
-        document.getElementById('nome').value = '<?= $produto_editar['nome_produto'] ?>';
-        document.getElementById('descricao').value = '<?= $produto_editar['descricao'] ?? '' ?>';
-        document.getElementById('preco').value = '<?= $produto_editar['preco_venda'] ?>';
-        document.getElementById('estoque').value = '<?= $produto_editar['estoque_atual'] ?>';
-        document.getElementById('codigo_barras').value = '<?= $produto_editar['codigo_barras_ean'] ?? '' ?>';
-        document.getElementById('unidade_medida').value = '<?= $produto_editar['unidade_medida'] ?>';
-        document.getElementById('ncm').value = '<?= $produto_editar['ncm'] ?? '01012100' ?>';
-        document.getElementById('ibpt').value = '<?= $produto_editar['ibpt'] ?? '4.20' ?>';
-        document.getElementById('acao_produto').name = 'editar_produto';
+        // Validação do formulário de produto
+        document.addEventListener('DOMContentLoaded', function() {
+            const formProduto = document.getElementById('formProduto');
+            if (formProduto) {
+                formProduto.addEventListener('submit', function(e) {
+                    const preco = parseFloat(document.getElementById('preco').value);
+                    const estoque = parseFloat(document.getElementById('estoque').value);
+                    const ncm = document.getElementById('ncm').value.trim();
+                    const ibpt = parseFloat(document.getElementById('ibpt').value);
+                    const nome = document.getElementById('nome').value.trim();
+                    const referencia = document.getElementById('referencia').value.trim();
 
-        <?php if(!empty($produto_editar['foto_produto'])): ?>
-            document.getElementById('imagemPreviewContainer').style.display = 'block';
-            document.getElementById('imagemPreview').src = 'uploads/imagens/<?= $produto_editar['foto_produto'] ?>';
-        <?php endif; ?>
-    });
-    <?php endif; ?>
-    
-    // Abrir modal de relatório se houver dados
-    <?php if(!empty($relatorio_data)): ?>
-    document.addEventListener('DOMContentLoaded', function() {
-        abrirModalRelatorio();
-    });
-    <?php endif; ?>
+                    if (isNaN(preco) || preco <= 0) {
+                        alert('O preço deve ser maior que zero');
+                        e.preventDefault();
+                        return;
+                    }
+
+                    if (isNaN(estoque) || estoque < 0) {
+                        alert('O estoque não pode ser negativo');
+                        e.preventDefault();
+                        return;
+                    }
+
+                    if (nome === '') {
+                        alert('O nome do produto é obrigatório');
+                        e.preventDefault();
+                        return;
+                    }
+
+                    if (referencia === '') {
+                        alert('O código de referência é obrigatório');
+                        e.preventDefault();
+                        return;
+                    }
+
+                    if (ncm === '') {
+                        alert('O NCM é obrigatório');
+                        e.preventDefault();
+                        return;
+                    }
+
+                    if (isNaN(ibpt) || ibpt < 0) {
+                        alert('A alíquota IBPT deve ser um número positivo');
+                        e.preventDefault();
+                        return;
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>
 
-buscarProdutos
