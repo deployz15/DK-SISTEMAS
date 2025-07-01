@@ -2691,83 +2691,87 @@ if ($caixa_aberto) {
                 </div>
 
                 <!-- Tabela de Itens -->
-                <div class="itens-container">
-                    <table class="itens-table">
-                        <thead>
-                            <tr>
-                                <th>Foto</th>
-                                <th>Item</th>
-                                <th>Código</th>
-                                <th>Produto</th>
-                                <th>Qtd</th>
-                                <th>Un</th>
-                                <th>V. Unit.</th>
-                                <th>Total</th>
-                                <th>Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if (empty($itens_venda)): ?>
-                                <tr>
-                                    <td colspan="9" style="text-align: center; padding: 5rem 1rem; color: var(--gray-700);">
-                                        <i class="fas fa-shopping-cart" style="font-size: 2rem; margin-bottom: 0.8rem; opacity: 0.3;"></i>
-                                        <p style="font-size: 0.9rem;">Nenhum produto adicionado à venda</p>
-                                    </td>
-                                </tr>
-                            <?php else: ?>
-                                <?php foreach ($itens_venda as $item): ?>
-                                    <tr>
-                                        <td>
-                                            <div class="produto-img-container">
-                                                <?php if (!empty($item['foto_produto']) && file_exists('uploads/imagens/'.$item['foto_produto'])): ?>
-                                                    <img src="uploads/imagens/<?= htmlspecialchars($item['foto_produto']) ?>" 
-                                                         class="produto-img" 
-                                                         alt="<?= htmlspecialchars($item['nome_produto']) ?>">
-                                                <?php else: ?>
-                                                    <i class="fas fa-image" style="color: #d1d5db; font-size: 2rem;"></i>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
-                                        <td><?= $item['sequencial_item'] ?></td>
-                                        <td><?= htmlspecialchars($item['referencia_interna']) ?></td>
-                                        <td><?= htmlspecialchars($item['nome_produto']) ?></td>
-                                        <td><?= number_format($item['quantidade'], 3, ',', '.') ?></td>
-                                        <td><?= htmlspecialchars($item['unidade_medida']) ?></td>
-                                        <td>R$ <?= number_format($item['preco_unitario_praticado'], 2, ',', '.') ?></td>
-                                        <td>R$ <?= number_format($item['valor_total_item'], 2, ',', '.') ?></td>
-                                        <td>
-                                            <a href="caixa.php?venda=<?= $venda_id ?>&remover_item=<?= $item['id_item_venda'] ?>" class="btn-remove" title="Remover" <?= !$caixa_aberto ? 'onclick="return false;"' : '' ?>>
-                                                <i class="fas fa-trash-alt"></i>
-                                            </a>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            <?php endif; ?>
-                        </tbody>
-                        <tfoot>
-                            <tr>
-                                <td colspan="6" style="text-align: right; font-size: 1rem;">Subtotal:</td>
-                                <td colspan="3">
-                                    R$ <?= number_format($total_venda + $desconto_venda, 2, ',', '.') ?>
-                                </td>
-                            </tr>
-                            <?php if ($desconto_venda > 0): ?>
-                            <tr>
-                                <td colspan="6" style="text-align: right; font-size: 1rem;">Desconto:</td>
-                                <td colspan="3" style="color: var(--danger);">
-                                    - R$ <?= number_format($desconto_venda, 2, ',', '.') ?>
-                                </td>
-                            </tr>
-                            <?php endif; ?>
-                            <tr>
-                                <td colspan="6" style="text-align: right; font-size: 1rem;">Total:</td>
-                                <td colspan="3" class="total-amount">
-                                    R$ <?= number_format($total_venda, 2, ',', '.') ?>
-                                </td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>
+<div class="itens-container">
+    <table class="itens-table">
+        <thead>
+            <tr>
+                <th>Foto</th>
+                <th>Item</th>
+                <th>Código</th>
+                <th>Produto</th>
+                <th>Qtd</th>
+                <th>Un</th>
+                <th>V. Unit.</th>
+                <th>Total</th>
+                <th>Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php if (empty($itens_venda)): ?>
+                <tr>
+                    <td colspan="9" style="text-align: center; padding: 5rem 1rem; color: var(--gray-700);">
+                        <i class="fas fa-shopping-cart" style="font-size: 2rem; margin-bottom: 0.8rem; opacity: 0.3;"></i>
+                        <p style="font-size: 0.9rem;">Nenhum produto adicionado à venda</p>
+                    </td>
+                </tr>
+            <?php else: ?>
+                <?php foreach ($itens_venda as $item): ?>
+                    <tr>
+                        <td>
+                            <div class="produto-img-container">
+                                <?php if (!empty($item['foto_produto']) && file_exists('uploads/imagens/'.$item['foto_produto'])): ?>
+                                    <img src="uploads/imagens/<?= htmlspecialchars($item['foto_produto']) ?>" 
+                                         class="produto-img" 
+                                         alt="<?= htmlspecialchars($item['nome_produto']) ?>">
+                                <?php else: ?>
+                                    <i class="fas fa-image" style="color: #d1d5db; font-size: 2rem;"></i>
+                                <?php endif; ?>
+                            </div>
+                        </td>
+                        <td><?= $item['sequencial_item'] ?></td>
+                        <td><?= htmlspecialchars($item['referencia_interna']) ?></td>
+                        <td><?= htmlspecialchars($item['nome_produto']) ?></td>
+                        <td><?= number_format($item['quantidade'], 3, ',', '.') ?></td>
+                        <td><?= htmlspecialchars($item['unidade_medida']) ?></td>
+                        <td>R$ <?= number_format($item['preco_unitario_praticado'], 2, ',', '.') ?></td>
+                        <td>R$ <?= number_format($item['valor_total_item'], 2, ',', '.') ?></td>
+                        <td>
+                            <button type="button"
+                                class="btn-remove"
+                                title="Remover"
+                                data-item-id="<?= $item['id_item_venda'] ?>"
+                                <?= !$caixa_aberto ? 'disabled' : '' ?>>
+                                <i class="fas fa-trash-alt"></i>
+                            </button>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </tbody>
+        <tfoot>
+            <tr>
+                <td colspan="6" style="text-align: right; font-size: 1rem;">Subtotal:</td>
+                <td colspan="3">
+                    R$ <?= number_format($total_venda + $desconto_venda, 2, ',', '.') ?>
+                </td>
+            </tr>
+            <?php if ($desconto_venda > 0): ?>
+            <tr>
+                <td colspan="6" style="text-align: right; font-size: 1rem;">Desconto:</td>
+                <td colspan="3" style="color: var(--danger);">
+                    - R$ <?= number_format($desconto_venda, 2, ',', '.') ?>
+                </td>
+            </tr>
+            <?php endif; ?>
+            <tr>
+                <td colspan="6" style="text-align: right; font-size: 1rem;">Total:</td>
+                <td colspan="3" class="total-amount">
+                    R$ <?= number_format($total_venda, 2, ',', '.') ?>
+                </td>
+            </tr>
+        </tfoot>
+    </table>
+</div>
 
                 <!-- Finalizar Venda -->
                 <div class="finalizar-venda">
@@ -4133,6 +4137,55 @@ function gerarRelatorioVendedores() {
     });
 }
 
+// Remoção animada de item - SweetAlert2 + AJAX
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.btn-remove[data-item-id]');
+    if (!btn) return;
+    if (btn.disabled) return;
+
+    const itemId = btn.getAttribute('data-item-id');
+    const vendaId = <?= $venda_id ?: 'null' ?>;
+
+    Swal.fire({
+        title: 'Remover item?',
+        html: '<b>Certeza que deseja remover este item?</b><br>Esta ação não pode ser desfeita! 😱',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sim, remover!',
+        cancelButtonText: 'Cancelar'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            fetch('remover_item_ajax.php', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `item_id=${itemId}&venda_id=${vendaId}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    Swal.fire({
+                        title: 'Removido!',
+                        text: 'O item foi removido da venda!',
+                        icon: 'success',
+                        timer: 1200,
+                        showConfirmButton: false
+                    });
+                    // Atualiza a tela recarregando a página (volta ao caixa.php)
+                    setTimeout(() => {
+                        window.location.href = "caixa.php?venda=" + vendaId;
+                    }, 1200);
+                } else {
+                    Swal.fire('Erro!', data.message || 'Erro ao remover item!', 'error');
+                }
+            })
+            .catch(() => {
+                Swal.fire('Erro!', 'Houve um problema ao remover o item.', 'error');
+            });
+        }
+    });
+});
 // Delegation para botões de ação na tabela de vendas
 document.addEventListener('click', function(e) {
     const btn = e.target.closest('[data-action]');
@@ -4159,3 +4212,4 @@ document.addEventListener('click', function(e) {
 </body>
 </html>
 
+remover_item
