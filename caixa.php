@@ -2691,87 +2691,87 @@ if ($caixa_aberto) {
                 </div>
 
                 <!-- Tabela de Itens -->
-<div class="itens-container">
-    <table class="itens-table">
-        <thead>
-            <tr>
-                <th>Foto</th>
-                <th>Item</th>
-                <th>Código</th>
-                <th>Produto</th>
-                <th>Qtd</th>
-                <th>Un</th>
-                <th>V. Unit.</th>
-                <th>Total</th>
-                <th>Ações</th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php if (empty($itens_venda)): ?>
-                <tr>
-                    <td colspan="9" style="text-align: center; padding: 5rem 1rem; color: var(--gray-700);">
-                        <i class="fas fa-shopping-cart" style="font-size: 2rem; margin-bottom: 0.8rem; opacity: 0.3;"></i>
-                        <p style="font-size: 0.9rem;">Nenhum produto adicionado à venda</p>
-                    </td>
-                </tr>
-            <?php else: ?>
-                <?php foreach ($itens_venda as $item): ?>
-                    <tr>
-                        <td>
-                            <div class="produto-img-container">
-                                <?php if (!empty($item['foto_produto']) && file_exists('uploads/imagens/'.$item['foto_produto'])): ?>
-                                    <img src="uploads/imagens/<?= htmlspecialchars($item['foto_produto']) ?>" 
-                                         class="produto-img" 
-                                         alt="<?= htmlspecialchars($item['nome_produto']) ?>">
-                                <?php else: ?>
-                                    <i class="fas fa-image" style="color: #d1d5db; font-size: 2rem;"></i>
-                                <?php endif; ?>
-                            </div>
-                        </td>
-                        <td><?= $item['sequencial_item'] ?></td>
-                        <td><?= htmlspecialchars($item['referencia_interna']) ?></td>
-                        <td><?= htmlspecialchars($item['nome_produto']) ?></td>
-                        <td><?= number_format($item['quantidade'], 3, ',', '.') ?></td>
-                        <td><?= htmlspecialchars($item['unidade_medida']) ?></td>
-                        <td>R$ <?= number_format($item['preco_unitario_praticado'], 2, ',', '.') ?></td>
-                        <td>R$ <?= number_format($item['valor_total_item'], 2, ',', '.') ?></td>
-                        <td>
-                            <button type="button"
-                                class="btn-remove"
-                                title="Remover"
-                                data-item-id="<?= $item['id_item_venda'] ?>"
-                                <?= !$caixa_aberto ? 'disabled' : '' ?>>
-                                <i class="fas fa-trash-alt"></i>
-                            </button>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-            <?php endif; ?>
-        </tbody>
-        <tfoot>
-            <tr>
-                <td colspan="6" style="text-align: right; font-size: 1rem;">Subtotal:</td>
-                <td colspan="3">
-                    R$ <?= number_format($total_venda + $desconto_venda, 2, ',', '.') ?>
-                </td>
-            </tr>
-            <?php if ($desconto_venda > 0): ?>
-            <tr>
-                <td colspan="6" style="text-align: right; font-size: 1rem;">Desconto:</td>
-                <td colspan="3" style="color: var(--danger);">
-                    - R$ <?= number_format($desconto_venda, 2, ',', '.') ?>
-                </td>
-            </tr>
-            <?php endif; ?>
-            <tr>
-                <td colspan="6" style="text-align: right; font-size: 1rem;">Total:</td>
-                <td colspan="3" class="total-amount">
-                    R$ <?= number_format($total_venda, 2, ',', '.') ?>
-                </td>
-            </tr>
-        </tfoot>
-    </table>
-</div>
+                <div class="itens-container">
+                    <table class="itens-table">
+                        <thead>
+                            <tr>
+                                <th>Foto</th>
+                                <th>Item</th>
+                                <th>Código</th>
+                                <th>Produto</th>
+                                <th>Qtd</th>
+                                <th>Un</th>
+                                <th>V. Unit.</th>
+                                <th>Total</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if (empty($itens_venda)): ?>
+                                <tr>
+                                    <td colspan="9" style="text-align: center; padding: 5rem 1rem; color: var(--gray-700);">
+                                        <i class="fas fa-shopping-cart" style="font-size: 2rem; margin-bottom: 0.8rem; opacity: 0.3;"></i>
+                                        <p style="font-size: 0.9rem;">Nenhum produto adicionado à venda</p>
+                                    </td>
+                                </tr>
+                            <?php else: ?>
+                                <?php foreach ($itens_venda as $item): ?>
+                                    <tr>
+                                        <td>
+                                            <div class="produto-img-container">
+                                                <?php if (!empty($item['foto_produto']) && file_exists('uploads/imagens/'.$item['foto_produto'])): ?>
+                                                    <img src="uploads/imagens/<?= htmlspecialchars($item['foto_produto']) ?>" 
+                                                         class="produto-img" 
+                                                         alt="<?= htmlspecialchars($item['nome_produto']) ?>">
+                                                <?php else: ?>
+                                                    <i class="fas fa-image" style="color: #d1d5db; font-size: 2rem;"></i>
+                                                <?php endif; ?>
+                                            </div>
+                                        </td>
+                                        <td><?= $item['sequencial_item'] ?></td>
+                                        <td><?= htmlspecialchars($item['referencia_interna']) ?></td>
+                                        <td><?= htmlspecialchars($item['nome_produto']) ?></td>
+                                        <td><?= number_format($item['quantidade'], 3, ',', '.') ?></td>
+                                        <td><?= htmlspecialchars($item['unidade_medida']) ?></td>
+                                        <td>R$ <?= number_format($item['preco_unitario_praticado'], 2, ',', '.') ?></td>
+                                        <td>R$ <?= number_format($item['valor_total_item'], 2, ',', '.') ?></td>
+                                        <td>
+                                            <button type="button"
+    class="btn-remove"
+    title="Remover"
+    data-item-id="<?= $item['id_item_venda'] ?>"
+    <?= !$caixa_aberto ? 'disabled' : '' ?>>
+    <i class="fas fa-trash-alt"></i>
+</button>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <td colspan="6" style="text-align: right; font-size: 1rem;">Subtotal:</td>
+                                <td colspan="3">
+                                    R$ <?= number_format($total_venda + $desconto_venda, 2, ',', '.') ?>
+                                </td>
+                            </tr>
+                            <?php if ($desconto_venda > 0): ?>
+                            <tr>
+                                <td colspan="6" style="text-align: right; font-size: 1rem;">Desconto:</td>
+                                <td colspan="3" style="color: var(--danger);">
+                                    - R$ <?= number_format($desconto_venda, 2, ',', '.') ?>
+                                </td>
+                            </tr>
+                            <?php endif; ?>
+                            <tr>
+                                <td colspan="6" style="text-align: right; font-size: 1rem;">Total:</td>
+                                <td colspan="3" class="total-amount">
+                                    R$ <?= number_format($total_venda, 2, ',', '.') ?>
+                                </td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
 
                 <!-- Finalizar Venda -->
                 <div class="finalizar-venda">
@@ -3634,10 +3634,10 @@ function adicionarProduto(idProduto) {
 function atualizarTabelaItens(itens) {
     const tbody = document.querySelector('.itens-table tbody');
     const tfoot = document.querySelector('.itens-table tfoot');
-    
+
     // Limpa o conteúdo atual da tabela
     tbody.innerHTML = '';
-    
+
     if (itens.length === 0) {
         // Exibe mensagem quando não há itens
         tbody.innerHTML = `
@@ -3669,21 +3669,23 @@ function atualizarTabelaItens(itens) {
                 <td>R$ ${parseFloat(item.preco_unitario_praticado).toFixed(2).replace('.', ',')}</td>
                 <td>R$ ${parseFloat(item.valor_total_item).toFixed(2).replace('.', ',')}</td>
                 <td>
-                    <a href="caixa.php?venda=${vendaId}&remover_item=${item.id_item_venda}" class="btn-remove" title="Remover" 
-                       onclick="return <?= $caixa_aberto ? 'confirm(\'Tem certeza que deseja remover este item?\')' : 'false' ?>">
+                    <button type="button"
+                        class="btn-remove"
+                        title="Remover"
+                        data-item-id="${item.id_item_venda}">
                         <i class="fas fa-trash-alt"></i>
-                    </a>
+                    </button>
                 </td>
             `;
             tbody.appendChild(row);
         });
     }
-    
+
     // Calcula totais
     const subtotal = itens.reduce((sum, item) => sum + parseFloat(item.valor_total_item), 0);
     const desconto = parseFloat(document.querySelector('input[name="valor_desconto"]')?.value) || 0;
     const total = subtotal - desconto;
-    
+
     // Atualiza o rodapé da tabela com os totais
     tfoot.innerHTML = `
         <tr>
@@ -3701,33 +3703,35 @@ function atualizarTabelaItens(itens) {
             <td colspan="3" class="total-amount">R$ ${total.toFixed(2).replace('.', ',')}</td>
         </tr>
     `;
-    
+
     // Atualiza os botões de ação
     const btnFinalizar = document.getElementById('btnFinalizar');
     const btnCancelar = document.getElementById('btnCancelar');
     const btnDesconto = document.querySelector('[onclick="abrirModalDesconto()"]');
-    
+
     if (btnFinalizar && btnCancelar && btnDesconto) {
         const hasItems = itens.length > 0;
-        const caixaAberto = <?= $caixa_aberto ? 'true' : 'false' ?>;
-        
+        // ATENÇÃO: Substitua o valor abaixo pelo correto para sua aplicação.
+        // Se você usa PHP para passar o valor de $caixa_aberto, substitua aqui:
+        const caixaAberto = true; // ou false
+
         btnFinalizar.disabled = !hasItems || !caixaAberto;
         btnCancelar.disabled = !hasItems || !caixaAberto;
         btnDesconto.disabled = !hasItems;
     }
-    
+
     // Atualiza variáveis globais (IMPORTANTE para o modal de pagamento)
     totalVenda = total;
     descontoVenda = desconto;
-    
+
     // Atualiza o título da página com o total
-    document.title = `R$ ${total.toFixed(2)} - PDV ${<?= json_encode($nome_loja) ?>}`;
-    
+    document.title = `R$ ${total.toFixed(2)} - PDV KIARA DSOLE`;
+
     // Atualiza o modal de pagamento se estiver aberto
     if (document.getElementById('modalPagamento').classList.contains('active')) {
         abrirModalPagamento(); // Isso irá recalcular e atualizar os valores
     }
-    
+
     // Foca no campo de código de barras para próxima leitura
     const codigoInput = document.getElementById('codigoInput');
     if (codigoInput) {
@@ -4137,6 +4141,29 @@ function gerarRelatorioVendedores() {
     });
 }
 
+// Delegation para botões de ação na tabela de vendas
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    
+    const action = btn.dataset.action;
+    const idVenda = btn.dataset.id;
+    
+    switch(action) {
+        case 'reimprimir':
+            showLoading('Preparando reimpressão...');
+            window.location.href = `caixa.php?reimprimir_nfce=${idVenda}`;
+            break;
+            
+        case 'cancelar':
+            if (confirm('Tem certeza que deseja cancelar esta venda?')) {
+                showLoading('Cancelando venda...');
+                window.location.href = `caixa.php?cancelar_venda=${idVenda}`;
+            }
+            break;
+    }
+});
+
 // Remoção animada de item - SweetAlert2 + AJAX
 document.addEventListener('click', function(e) {
     const btn = e.target.closest('.btn-remove[data-item-id]');
@@ -4186,30 +4213,8 @@ document.addEventListener('click', function(e) {
         }
     });
 });
-// Delegation para botões de ação na tabela de vendas
-document.addEventListener('click', function(e) {
-    const btn = e.target.closest('[data-action]');
-    if (!btn) return;
-    
-    const action = btn.dataset.action;
-    const idVenda = btn.dataset.id;
-    
-    switch(action) {
-        case 'reimprimir':
-            showLoading('Preparando reimpressão...');
-            window.location.href = `caixa.php?reimprimir_nfce=${idVenda}`;
-            break;
-            
-        case 'cancelar':
-            if (confirm('Tem certeza que deseja cancelar esta venda?')) {
-                showLoading('Cancelando venda...');
-                window.location.href = `caixa.php?cancelar_venda=${idVenda}`;
-            }
-            break;
-    }
-});
 </script>
 </body>
 </html>
 
-remover_item
+atualizarTabelaItens
