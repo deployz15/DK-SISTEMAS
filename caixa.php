@@ -2850,8 +2850,6 @@ if ($caixa_aberto) {
 </div>
 
 
-
-
                 <!-- Ações da Venda -->
                 <div class="venda-actions">
                     <button type="button" class="btn-action primary" onclick="abrirModalProdutos()" <?= !$caixa_aberto ? 'disabled' : '' ?>>
@@ -4496,35 +4494,31 @@ function refazerTroca() {
 function buscarProdutoTroca() {
     const termo = document.getElementById('pesquisaProdutoTroca').value.trim();
     if (!termo) return;
-    
+
     showLoading('Buscando produto...');
-    
-    fetch(`buscar_produto_ajax.php?termo=${encodeURIComponent(termo)}&cnpj_loja=<?= $cnpj_loja ?>`)
+
+    fetch(`buscar_produto_ajax.php?termo=${encodeURIComponent(termo)}`)
         .then(response => response.json())
         .then(data => {
             if (data.success && data.produtos.length > 0) {
-                let html = '<div class="produto-grid" style="grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));">';
-                
+                let html = '<ul style="list-style:none;padding:0;">';
+
                 data.produtos.forEach(produto => {
                     html += `
-                        <div class="produto-card" onclick="selecionarProdutoTroca(${produto.id_produto}, '${produto.nome_produto}', ${produto.preco_venda}, '${produto.unidade_medida}')">
-                            <div class="produto-img-container">
-                                ${produto.foto_produto ? 
-                                    `<img src="uploads/imagens/${produto.foto_produto}" class="produto-img" alt="${produto.nome_produto}">` : 
-                                    `<i class="fas fa-image produto-sem-imagem"></i>`
-                                }
-                            </div>
-                            <div class="produto-info-container">
-                                <div class="produto-nome" title="${produto.nome_produto}">${produto.nome_produto}</div>
-                                <div class="produto-codigo">${produto.referencia_interna}</div>
-                                <div class="produto-preco">R$ ${produto.preco_venda.toFixed(2).replace('.', ',')}</div>
-                                <div class="produto-unidade">${produto.unidade_medida}</div>
-                            </div>
-                        </div>
+                        <li style="margin-bottom:10px;padding:10px;border-bottom:1px solid #eee;">
+                            <b>${produto.nome_produto}</b> 
+                            <span style="color:#888;">[${produto.referencia_interna || ''}]</span>
+                            <br>
+                            <span>Preço: R$ ${parseFloat(produto.preco_venda).toFixed(2).replace('.', ',')}</span>
+                            <span> ${produto.unidade_medida} </span>
+                            <button type="button" style="margin-left:10px;" class="btn-action primary" onclick="selecionarProdutoTroca(${produto.id_produto}, '${produto.nome_produto.replace(/'/g,"\\'")}', ${produto.preco_venda}, '${produto.unidade_medida}')">
+                                Selecionar
+                            </button>
+                        </li>
                     `;
                 });
-                
-                html += '</div>';
+
+                html += '</ul>';
                 document.getElementById('resultadoProdutoTroca').innerHTML = html;
             } else {
                 document.getElementById('resultadoProdutoTroca').innerHTML = `
@@ -4535,7 +4529,6 @@ function buscarProdutoTroca() {
             }
         })
         .catch(error => {
-            console.error('Erro:', error);
             document.getElementById('resultadoProdutoTroca').innerHTML = `
                 <div class="msg erro">
                     <i class="fas fa-exclamation-triangle"></i> Erro ao buscar produtos
@@ -4548,35 +4541,31 @@ function buscarProdutoTroca() {
 function buscarProdutoNovo() {
     const termo = document.getElementById('pesquisaProdutoNovo').value.trim();
     if (!termo) return;
-    
+
     showLoading('Buscando produto...');
-    
-    fetch(`buscar_produto_ajax.php?termo=${encodeURIComponent(termo)}&cnpj_loja=<?= $cnpj_loja ?>`)
+
+    fetch(`buscar_produto_ajax.php?termo=${encodeURIComponent(termo)}`)
         .then(response => response.json())
         .then(data => {
             if (data.success && data.produtos.length > 0) {
-                let html = '<div class="produto-grid" style="grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));">';
-                
+                let html = '<ul style="list-style:none;padding:0;">';
+
                 data.produtos.forEach(produto => {
                     html += `
-                        <div class="produto-card" onclick="selecionarProdutoNovo(${produto.id_produto}, '${produto.nome_produto}', ${produto.preco_venda}, '${produto.unidade_medida}')">
-                            <div class="produto-img-container">
-                                ${produto.foto_produto ? 
-                                    `<img src="uploads/imagens/${produto.foto_produto}" class="produto-img" alt="${produto.nome_produto}">` : 
-                                    `<i class="fas fa-image produto-sem-imagem"></i>`
-                                }
-                            </div>
-                            <div class="produto-info-container">
-                                <div class="produto-nome" title="${produto.nome_produto}">${produto.nome_produto}</div>
-                                <div class="produto-codigo">${produto.referencia_interna}</div>
-                                <div class="produto-preco">R$ ${produto.preco_venda.toFixed(2).replace('.', ',')}</div>
-                                <div class="produto-unidade">${produto.unidade_medida}</div>
-                            </div>
-                        </div>
+                        <li style="margin-bottom:10px;padding:10px;border-bottom:1px solid #eee;">
+                            <b>${produto.nome_produto}</b> 
+                            <span style="color:#888;">[${produto.referencia_interna || ''}]</span>
+                            <br>
+                            <span>Preço: R$ ${parseFloat(produto.preco_venda).toFixed(2).replace('.', ',')}</span>
+                            <span> ${produto.unidade_medida} </span>
+                            <button type="button" style="margin-left:10px;" class="btn-action primary" onclick="selecionarProdutoNovo(${produto.id_produto}, '${produto.nome_produto.replace(/'/g,"\\'")}', ${produto.preco_venda}, '${produto.unidade_medida}')">
+                                Selecionar
+                            </button>
+                        </li>
                     `;
                 });
-                
-                html += '</div>';
+
+                html += '</ul>';
                 document.getElementById('resultadoProdutoNovo').innerHTML = html;
             } else {
                 document.getElementById('resultadoProdutoNovo').innerHTML = `
@@ -4587,7 +4576,6 @@ function buscarProdutoNovo() {
             }
         })
         .catch(error => {
-            console.error('Erro:', error);
             document.getElementById('resultadoProdutoNovo').innerHTML = `
                 <div class="msg erro">
                     <i class="fas fa-exclamation-triangle"></i> Erro ao buscar produtos
@@ -4810,3 +4798,4 @@ document.addEventListener('click', function(e) {
 </script>
 </body>
 </html>
+buscar_produto.php
