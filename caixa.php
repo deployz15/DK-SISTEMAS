@@ -7,12 +7,17 @@ if (!isset($_SESSION['usuario_logado'])) {
 
 require_once 'conexao.php';
 
+
+
 // Validação adicional de sessão
 if (empty($_SESSION['nome_usuario_logado']) || empty($_SESSION['cnpj_loja_logada'])) {
     session_destroy();
     header('Location: login.php');
     exit;
 }
+
+// Inicializar venda_id como null
+$venda_id = null;
 
 // Forçar fuso horário brasileiro
 date_default_timezone_set('America/Sao_Paulo');
@@ -114,6 +119,134 @@ if (isset($_GET['remover_vendedor'])) {
 $stmt = $pdo->prepare("SELECT usuario FROM usuarios WHERE cnpj_loja = ? ORDER BY usuario");
 $stmt->execute([$cnpj_loja]);
 $vendedores = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+// Processar troca de produto
+if ($venda_id && isset($_POST['processar_troca'])) {
+    try {
+        $pdo->beginTransaction();
+        
+        // Dados da troca
+        $produto_entrada_id = intval($_POST['produto_entrada_id']);
+        $produto_saida_id = intval($_POST['produto_saida_id']);
+        $quantidade_entrada = floatval($_POST['quantidade_entrada']);
+        $quantidade_saida = floatval($_POST['quantidade_saida']);
+        $forma_pagamento = $_POST['forma_pagamento_troca'];
+        $valor_diferenca = floatval($_POST['valor_diferenca']);
+        
+        // Validar dados
+        if ($produto_entrada_id <= 0 || $produto_saida_id <= 0 || $quantidade_entrada <= 0 || $quantidade_saida <= 0) {
+            throw new Exception("Dados inválidos para a troca");
+        }
+        
+        // Obter informações dos produtos
+        $stmt = $pdo->prepare("SELECT id_produto, nome_produto, preco_venda, estoque_atual FROM produtos WHERE id_produto IN (?, ?)");
+        $stmt->execute([$produto_entrada_id, $produto_saida_id]);
+        $produtos = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+        
+        if (count($produtos) != 2) {
+            throw new Exception("Um ou ambos os produtos não foram encontrados");
+        }
+        
+        // Verificar estoque do produto de entrada
+        if ($produtos[$produto_entrada_id]['estoque_atual'] < $quantidade_entrada) {
+            throw new Exception("Estoque insuficiente para o produto de entrada");
+        }
+        
+        // Calcular valores
+        $valor_entrada = $produtos[$produto_entrada_id]['preco_venda'] * $quantidade_entrada;
+        $valor_saida = $produtos[$produto_saida_id]['preco_venda'] * $quantidade_saida;
+        $diferenca_calculada = $valor_entrada - $valor_saida;
+        
+        if (abs($diferenca_calculada - $valor_diferenca) > 0.01) {
+            throw new Exception("Diferença de valor não confere");
+        }
+        
+        // Registrar a venda de troca
+        $dataVenda = (new DateTime('now', new DateTimeZone('America/Sao_Paulo')))->format('Y-m-d H:i:s');
+        
+        $stmt = $pdo->prepare("INSERT INTO vendas 
+            (cnpj_loja, usuario_vendedor, valor_subtotal, valor_total_venda, data_hora_venda, status_venda, tipo_venda) 
+            VALUES (?, ?, ?, ?, ?, 'CONCLUIDA', 'TROCA')");
+        $stmt->execute([
+            $cnpj_loja, 
+            $usuario, 
+            $valor_entrada, 
+            $valor_entrada, 
+            $dataVenda
+        ]);
+        $id_venda_troca = $pdo->lastInsertId();
+        
+        // Adicionar itens à venda
+        // Produto de entrada (o que o cliente está levando)
+        $stmt = $pdo->prepare("INSERT INTO itens_venda 
+            (id_venda, id_produto, sequencial_item, quantidade, preco_unitario_praticado, 
+            valor_total_item, ncm_produto, cfop_produto) 
+            VALUES (?, ?, 1, ?, ?, ?, ?, ?)");
+        $stmt->execute([
+            $id_venda_troca,
+            $produto_entrada_id,
+            $quantidade_entrada,
+            $produtos[$produto_entrada_id]['preco_venda'],
+            $valor_entrada,
+            '21050010', // NCM genérico - ajuste conforme necessário
+            '5102'     // CFOP para venda
+        ]);
+        
+        // Produto de saída (o que o cliente está devolvendo)
+        $stmt = $pdo->prepare("INSERT INTO itens_venda 
+            (id_venda, id_produto, sequencial_item, quantidade, preco_unitario_praticado, 
+            valor_total_item, ncm_produto, cfop_produto, item_troca) 
+            VALUES (?, ?, 2, ?, ?, ?, ?, ?, 1)");
+        $stmt->execute([
+            $id_venda_troca,
+            $produto_saida_id,
+            $quantidade_saida,
+            $produtos[$produto_saida_id]['preco_venda'],
+            $valor_saida,
+            '21050010', // NCM genérico - ajuste conforme necessário
+            '5202',     // CFOP para devolução
+        ]);
+        
+        // Registrar pagamento (se houver diferença)
+        if ($valor_diferenca != 0) {
+            $codigo_nfce = match($forma_pagamento) {
+                'DINHEIRO' => '01',
+                'CARTAO_CREDITO' => '03',
+                'CARTAO_DEBITO' => '04',
+                'PIX' => '17',
+                default => '99'
+            };
+            
+            $stmt = $pdo->prepare("INSERT INTO pagamentos_venda 
+                (id_venda, forma_pagamento, meio_pagamento_nfce, valor_pago) 
+                VALUES (?, ?, ?, ?)");
+            $stmt->execute([
+                $id_venda_troca, 
+                $forma_pagamento, 
+                $codigo_nfce, 
+                abs($valor_diferenca)
+            ]);
+        }
+        
+        // Atualizar estoques
+        // Diminuir estoque do produto de entrada (o que o cliente está levando)
+        $stmt = $pdo->prepare("UPDATE produtos SET estoque_atual = estoque_atual - ? WHERE id_produto = ?");
+        $stmt->execute([$quantidade_entrada, $produto_entrada_id]);
+        
+        // Aumentar estoque do produto de saída (o que o cliente está devolvendo)
+        $stmt = $pdo->prepare("UPDATE produtos SET estoque_atual = estoque_atual + ? WHERE id_produto = ?");
+        $stmt->execute([$quantidade_saida, $produto_saida_id]);
+        
+        $pdo->commit();
+        
+        header("Location: caixa.php?msg=troca_sucesso&venda_troca=".$id_venda_troca);
+        exit;
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        header("Location: caixa.php?venda=".$venda_id."&msg=erro_troca&erro=".urlencode($e->getMessage()));
+        exit;
+    }
+}
 
 // Buscar últimas vendas com prepared statement - MODIFICADO PARA MOSTRAR CONCLUÍDAS E CANCELADAS
 $stmt = $pdo->prepare("SELECT v.id_venda, v.data_hora_venda, v.valor_total_venda, v.usuario_vendedor, v.status_venda,
@@ -246,9 +379,9 @@ if (isset($_POST['acao_caixa'])) {
 }
 
 
-// Verificar venda em aberto com validação
-$venda_id = isset($_GET['venda']) ? intval($_GET['venda']) : null;
-if (!$venda_id && $caixa_aberto) {
+// Verificar venda em aberto com validação - MODIFICADO
+$venda_id = null;
+if ($caixa_aberto) {
     $stmt = $pdo->prepare("SELECT id_venda FROM vendas 
                           WHERE cnpj_loja = ? AND usuario_vendedor = ? 
                           AND status_venda = 'EM_ABERTO' 
@@ -256,6 +389,20 @@ if (!$venda_id && $caixa_aberto) {
     $stmt->execute([$cnpj_loja, $usuario]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     $venda_id = $row['id_venda'] ?? null;
+}
+
+// Se houver venda_id na URL, prioriza ela
+if (isset($_GET['venda']) && is_numeric($_GET['venda'])) {
+    $venda_id = intval($_GET['venda']);
+    
+    // Verifica se a venda pertence à loja
+    $stmt = $pdo->prepare("SELECT id_venda FROM vendas WHERE id_venda = ? AND cnpj_loja = ?");
+    $stmt->execute([$venda_id, $cnpj_loja]);
+    if (!$stmt->fetch()) {
+        $venda_id = null;
+        header("Location: caixa.php?msg=venda_nao_encontrada");
+        exit;
+    }
 }
 
 // Carregar dados da venda e itens com validação
@@ -903,6 +1050,8 @@ $mensagens = [
     'erro_cancelar_venda' => ['type' => 'erro', 'text' => 'Erro ao cancelar venda.', 'icon' => 'times-circle'],
     'datas_invalidas' => ['type' => 'erro', 'text' => 'Datas inválidas para o relatório.', 'icon' => 'times-circle'],
     'quantidade_invalida' => ['type' => 'erro', 'text' => 'Quantidade inválida.', 'icon' => 'times-circle'],
+ 'troca_sucesso' => ['type' => 'sucesso', 'text' => 'Troca realizada com sucesso!', 'icon' => 'exchange-alt'],
+'erro_troca' => ['type' => 'erro', 'text' => 'Erro ao processar troca: '.($_GET['erro'] ?? ''), 'icon' => 'times-circle'],
     'erro_data_venda' => ['type' => 'erro', 'text' => 'Não é possível finalizar venda de data diferente da atual.', 'icon' => 'times-circle']
 ];
 
@@ -1575,7 +1724,7 @@ if ($caixa_aberto) {
 .produto-card {
     display: flex;
     flex-direction: column;
-    height: 320px;
+    height: 360px;
     border: 1px solid #e0e0e0;
     border-radius: 10px;
     overflow: hidden;
@@ -1593,7 +1742,7 @@ if ($caixa_aberto) {
 
 /* CONTAINER DA IMAGEM */
 .produto-img-container {
-    height: 140px;
+    height: 180px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1604,8 +1753,8 @@ if ($caixa_aberto) {
 }
 
 .produto-img {
-    max-width: 90%;
-    max-height: 90%;
+    max-width: 95%;
+    max-height: 95%;
     object-fit: contain;
     transition: transform 0.3s ease;
 }
@@ -1629,18 +1778,20 @@ if ($caixa_aberto) {
 
 .produto-nome {
     flex: 1;
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1.4;
     margin-bottom: 8px;
     color: #333;
     display: -webkit-box;
-    -webkit-line-clamp: 3;
+    -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     text-overflow: ellipsis;
     word-break: break-word;
-    min-height: 60px;
+    min-height: auto;
     position: relative;
+        padding: 5px 0; /* Adicionei padding */
+
 }
 
 .produto-nome:hover::after {
@@ -1670,19 +1821,21 @@ if ($caixa_aberto) {
 }
 
 .produto-codigo {
-    font-size: 12px;
+    font-size: 16px;
     color: #666;
     margin-bottom: 8px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+        font-weight: 500; /* Adicionei peso da fonte */
+
 }
 
 .produto-preco {
     font-weight: 700;
-    font-size: 16px;
+    font-size: 18px;
     color: #2a4bcc;
-    margin: 8px 0;
+    margin: 10px 0;
 }
 
 /* QUANTIDADE E BOTÃO */
@@ -2583,6 +2736,28 @@ if ($caixa_aberto) {
     background: rgba(0,0,0,0.7) !important;
 }
 
+.modal-overlay {
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.modal {
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
+}
+
+.relatorio-table th:nth-child(3),
+.relatorio-table td:nth-child(3) {
+    text-align: center;
+}
+
+.relatorio-table th:nth-child(4),
+.relatorio-table td:nth-child(4),
+.relatorio-table th:nth-child(5),
+.relatorio-table td:nth-child(5),
+.relatorio-table th:nth-child(6),
+.relatorio-table td:nth-child(6) {
+    text-align: right;
+}
+
 /* Adicione no seu <style> *
     /* ===== FIM DO SPINNER ===== */
 </style>
@@ -2682,9 +2857,13 @@ if ($caixa_aberto) {
                     <button type="button" class="btn-action primary" onclick="abrirModalProdutos()" <?= !$caixa_aberto ? 'disabled' : '' ?>>
                         <i class="fas fa-box-open"></i> Adicionar Produtos
                     </button>
+                    
                     <button type="button" class="btn-action secondary" onclick="abrirModalUltimasVendas()">
                         <i class="fas fa-receipt"></i> Ver Vendas Anteriores
                     </button>
+<button type="button" class="btn-action warning" onclick="abrirModalTroca()">
+    <i class="fas fa-exchange-alt"></i> Troca de Produto
+</button>
                     <button type="button" class="btn-action info" onclick="abrirModalDesconto()" <?= empty($itens_venda) ? 'disabled' : '' ?>>
                         <i class="fas fa-tag"></i> Aplicar Desconto
                     </button>
@@ -3258,6 +3437,147 @@ if ($caixa_aberto) {
         </div>
     </div>
 
+    <!-- Modal Troca de Produto -->
+<div class="modal-overlay" id="modalTroca">
+    <div class="modal" style="max-width: 800px;">
+        <div class="modal-header">
+            <h3>Troca de Produto</h3>
+            <button class="modal-close" onclick="fecharModalTroca()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="formTroca" method="post">
+                <input type="hidden" name="processar_troca" value="1">
+                
+                <div class="troca-container">
+                    <!-- Seção 1: Produto que o cliente está trazendo para troca -->
+                    <div class="troca-section">
+                        <h4 style="margin-bottom: 1rem; color: var(--primary);">
+                            <i class="fas fa-arrow-right"></i> Produto para Troca (que o cliente está trazendo)
+                        </h4>
+                        
+                        <div class="produto-search-container">
+                            <div class="produto-search-box">
+                                <input type="text" 
+                                       id="pesquisaProdutoTroca" 
+                                       class="produto-search-input" 
+                                       placeholder="Pesquisar produto por nome ou código..."
+                                       autocomplete="off"
+                                       required>
+                                <button type="button" class="produto-search-btn" onclick="buscarProdutoTroca()">
+                                    <i class="fas fa-search"></i> Buscar
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div id="resultadoProdutoTroca" style="margin-top: 1rem;"></div>
+                        
+                        <input type="hidden" id="produto_troca_id" name="produto_saida_id">
+                        <input type="hidden" id="preco_troca" value="0">
+                        
+                        <div class="troca-quantidade" style="margin-top: 1rem; display: none;" id="quantidadeTrocaContainer">
+                            <label for="quantidade_troca">Quantidade:</label>
+                            <input type="number" 
+                                   id="quantidade_troca" 
+                                   name="quantidade_saida" 
+                                   min="0.001" 
+                                   step="0.001" 
+                                   value="1" 
+                                   class="desconto-input" 
+                                   onchange="calcularDiferencaTroca()"
+                                   required>
+                        </div>
+                    </div>
+                    
+                    <!-- Seção 2: Produto que o cliente vai levar -->
+                    <div class="troca-section" style="margin-top: 2rem;">
+                        <h4 style="margin-bottom: 1rem; color: var(--primary);">
+                            <i class="fas fa-arrow-left"></i> Produto Novo (que o cliente vai levar)
+                        </h4>
+                        
+                        <div class="produto-search-container">
+                            <div class="produto-search-box">
+                                <input type="text" 
+                                       id="pesquisaProdutoNovo" 
+                                       class="produto-search-input" 
+                                       placeholder="Pesquisar produto por nome ou código..."
+                                       autocomplete="off"
+                                       required>
+                                <button type="button" class="produto-search-btn" onclick="buscarProdutoNovo()">
+                                    <i class="fas fa-search"></i> Buscar
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div id="resultadoProdutoNovo" style="margin-top: 1rem;"></div>
+                        
+                        <input type="hidden" id="produto_novo_id" name="produto_entrada_id">
+                        <input type="hidden" id="preco_novo" value="0">
+                        
+                        <div class="troca-quantidade" style="margin-top: 1rem; display: none;" id="quantidadeNovoContainer">
+                            <label for="quantidade_novo">Quantidade:</label>
+                            <input type="number" 
+                                   id="quantidade_novo" 
+                                   name="quantidade_entrada" 
+                                   min="0.001" 
+                                   step="0.001" 
+                                   value="1" 
+                                   class="desconto-input" 
+                                   onchange="calcularDiferencaTroca()"
+                                   required>
+                        </div>
+                    </div>
+                    
+                    <!-- Seção 3: Resumo da troca -->
+                    <div class="troca-resumo" style="margin-top: 2rem; padding: 1rem; background: #f5f7ff; border-radius: 0.5rem; display: none;" id="resumoTroca">
+                        <h4 style="margin-bottom: 1rem; text-align: center;">Resumo da Troca</h4>
+                        
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span>Valor do Produto para Troca:</span>
+                            <strong id="valor-produto-troca">R$ 0,00</strong>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span>Valor do Produto Novo:</span>
+                            <strong id="valor-produto-novo">R$ 0,00</strong>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 1.1rem;">
+                            <span>Diferença:</span>
+                            <strong id="valor-diferenca" style="color: var(--primary);">R$ 0,00</strong>
+                            <input type="hidden" id="input_valor_diferenca" name="valor_diferenca" value="0">
+                        </div>
+                        
+                        <div id="forma-pagamento-troca-container" style="margin-top: 1rem; display: none;">
+                            <label for="forma_pagamento_troca">Forma de Pagamento da Diferença:</label>
+                            <select id="forma_pagamento_troca" name="forma_pagamento_troca" class="desconto-input" required>
+                                <option value="DINHEIRO">Dinheiro</option>
+                                <option value="CARTAO_CREDITO">Cartão de Crédito</option>
+                                <option value="CARTAO_DEBITO">Cartão de Débito</option>
+                                <option value="PIX">Pix</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <!-- Botões de ação -->
+                    <div style="display: flex; justify-content: space-between; margin-top: 2rem;">
+                        <button type="button" class="btn-action secondary" onclick="fecharModalTroca()">
+                            <i class="fas fa-times"></i> Cancelar
+                        </button>
+                        
+                        <button type="button" class="btn-action warning" onclick="refazerTroca()">
+                            <i class="fas fa-redo"></i> Refazer
+                        </button>
+                        
+                        <button type="submit" class="btn-action primary" id="btnConfirmarTroca" disabled>
+                            <i class="fas fa-check"></i> Confirmar Troca
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
     <!-- Modal Desconto -->
     <div class="modal-overlay" id="modalDesconto">
         <div class="modal" style="max-width: 450px;">
@@ -3319,25 +3639,29 @@ if ($caixa_aberto) {
                     <!-- Resultados serão carregados aqui via AJAX -->
                     <?php if (isset($relatorio_vendedores)): ?>
                         <table class="relatorio-table">
-                            <thead>
-                                <tr>
-                                    <th>Vendedor</th>
-                                    <th>Total Vendas</th>
-                                    <th>Valor Total</th>
-                                    <th>Média por Venda</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach($relatorio_vendedores as $vendedor): ?>
-                                    <tr>
-                                        <td><?= htmlspecialchars($vendedor['usuario_vendedor']) ?></td>
-                                        <td><?= $vendedor['total_vendas'] ?></td>
-                                        <td>R$ <?= number_format($vendedor['valor_total'], 2, ',', '.') ?></td>
-                                        <td>R$ <?= number_format($vendedor['valor_total'] / $vendedor['total_vendas'], 2, ',', '.') ?></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+    <thead>
+        <tr>
+            <th>Vendedor</th>
+            <th>Total Vendas</th>
+            <th>Total Itens</th>
+            <th>Valor Total</th>
+            <th>Média por Venda</th>
+            <th>aproveitamento</th>
+        </tr>
+    </thead>
+    <tbody>
+        <?php foreach($relatorio_vendedores as $vendedor): ?>
+            <tr>
+                <td><?= htmlspecialchars($vendedor['usuario_vendedor']) ?></td>
+                <td><?= $vendedor['total_vendas'] ?></td>
+                <td><?= $vendedor['total_itens'] ?></td>
+                <td>R$ <?= number_format($vendedor['valor_total'], 2, ',', '.') ?></td>
+                <td>R$ <?= number_format($vendedor['valor_total'] / $vendedor['total_vendas'], 2, ',', '.') ?></td>
+                <td><?= number_format($vendedor['total_itens'] / $vendedor['total_vendas'], 2, ',', '.') ?></td>
+            </tr>
+        <?php endforeach; ?>
+    </tbody>
+</table>
                     <?php endif; ?>
                 </div>
             </div>
@@ -3379,14 +3703,30 @@ let currentSearchTerm = '';
 
 // Funções para abrir/fechar modais
 function abrirModalProdutos() {
-    document.getElementById('modalProdutos').classList.add('active');
+    const modal = document.getElementById('modalProdutos');
+    modal.style.display = 'flex';
+    setTimeout(() => {
+        modal.classList.add('active');
+    }, 10);
+    
     document.getElementById('pesquisaProduto').value = '';
     currentSearchTerm = '';
     carregarProdutos(1);
 }
 
 function fecharModalProdutos() {
-    document.getElementById('modalProdutos').classList.remove('active');
+    const modal = document.getElementById('modalProdutos');
+    modal.classList.remove('active');
+    
+    // Adiciona animação de fade out
+    modal.style.transition = 'opacity 0.3s ease';
+    modal.style.opacity = '0';
+    
+    setTimeout(() => {
+        modal.style.display = 'none';
+        modal.style.opacity = '1';
+        modal.style.transition = '';
+    }, 300);
 }
 
 function abrirModalVendedor() {
@@ -3545,89 +3885,94 @@ function atualizarPaginacao(pagina) {
 }
 
 function adicionarProduto(idProduto) {
-    // Verifica se já está adicionando um produto para evitar duplicação
     if (isAddingProduct) return;
     isAddingProduct = true;
     
-    // Obtém a quantidade do input (valor padrão 1 se não informado)
     const quantidadeInput = document.getElementById(`qtd-${idProduto}`);
     const quantidade = parseFloat(quantidadeInput.value) || 1;
     
-    // Validação básica da quantidade
     if (quantidade <= 0) {
-        alert('Informe uma quantidade válida');
+        Swal.fire('Erro', 'Informe uma quantidade válida', 'error');
         isAddingProduct = false;
         return;
     }
     
-    // Exibe o loading
+    // --- NOVO: VERIFICA ESTOQUE ANTES ---
+    showLoading('Verificando estoque...');
+    
+    fetch(`verificar_estoque.php?id_produto=${idProduto}&quantidade=${quantidade}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.estoque_disponivel >= quantidade) {
+                // Se tem estoque, chama a função que adiciona de fato
+                adicionarProdutoAposVerificacao(idProduto, quantidade);
+            } else {
+                // --- NOVO: MOSTRA ERRO DETALHADO ---
+                Swal.fire({
+                    title: 'Estoque Insuficiente',
+                    html: `Produto: <b>${data.nome_produto}</b><br>
+                           Em estoque: <b>${data.estoque_disponivel}</b><br>
+                           Você tentou: <b>${quantidade}</b>`,
+                    icon: 'error',
+                    confirmButtonText: 'OK'
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Erro:', error);
+            Swal.fire('Erro', 'Não foi possível verificar o estoque', 'error');
+        })
+        .finally(() => {
+            isAddingProduct = false;
+            hideLoading();
+        });
+}
+
+// --- NOVA FUNÇÃO SEPARADA PARA ADICIONAR APÓS VERIFICAÇÃO ---
+function adicionarProdutoAposVerificacao(idProduto, quantidade) {
     showLoading('Adicionando produto...');
     
-    // Prepara os dados para envio
     const formData = new FormData();
     formData.append('id_produto', idProduto);
     formData.append('quantidade', quantidade);
     formData.append('add_produto_modal', '1');
     formData.append('venda', vendaId);
     
-    // Faz a requisição AJAX
     fetch(`adicionar_produto_ajax.php?venda=${vendaId}`, {
         method: 'POST',
         body: formData
     })
-    .then(response => {
-        // Verifica se a resposta foi bem sucedida
-        if (!response.ok) {
-            throw new Error('Erro na rede: ' + response.statusText);
-        }
-        return response.json();
-    })
+    .then(response => response.json())
     .then(data => {
-        // Verifica se a operação foi bem sucedida no servidor
         if (data.success) {
-            // Exibe mensagem de sucesso
-            showSuccessMessage('Produto adicionado com sucesso!');
+            // Mostra feedback visual
+            showSuccessMessage(`${data.produto_adicionado.nome} adicionado!`);
             
-            // Atualiza a tabela de itens com os novos dados
+            // Fecha o modal de produtos
+            fecharModalProdutos();
+            
+            // Atualiza a tabela de itens se houver dados
             if (data.itens_venda) {
                 atualizarTabelaItens(data.itens_venda);
             }
             
-            // Reseta o campo de quantidade
-            if (quantidadeInput) {
-                quantidadeInput.value = '1';
-            }
+            // Foca no campo de código para próxima leitura
+            setTimeout(() => {
+                document.getElementById('codigoInput')?.focus();
+            }, 500);
             
-            // Fecha o modal imediatamente
-            fecharModalProdutos();
-            
-            // Foca no campo de código de barras para próxima leitura
-            const codigoInput = document.getElementById('codigoInput');
-            if (codigoInput) {
-                codigoInput.focus();
-            }
+            // Mantém o feedback por 1.5 segundos
+            setTimeout(hideLoading, 1500);
         } else {
-            // Lança erro com a mensagem do servidor
-            throw new Error(data.message || 'Erro ao adicionar produto');
+            throw new Error(data.message);
         }
     })
     .catch(error => {
-        console.error('Erro:', error);
-        
-        // Exibe mensagem de erro específica
-        let errorMessage = error.message;
-        
-        // Tratamento especial para estoque insuficiente
-        if (errorMessage.includes('estoque') || errorMessage.includes('Estoque')) {
-            errorMessage = 'Estoque insuficiente para este produto';
-        }
-        
-        showErrorMessage(errorMessage);
+        hideLoading();
+        Swal.fire('Erro', error.message, 'error');
     })
     .finally(() => {
-        // Libera para novas adições
         isAddingProduct = false;
-        hideLoading();
     });
 }
 
@@ -4090,6 +4435,241 @@ function cancelarVendaFinalizada(idVenda) {
         }
     });
 }
+
+// Corrigindo a função abrirModalTroca
+function abrirModalTroca() {
+    // Verifica se há venda em aberto
+    if (!vendaId) {
+        alert('Inicie uma venda antes de realizar trocas');
+        return;
+    }
+
+    // Verifica se há itens na venda
+    fetch(`verificar_itens_venda.php?venda_id=${vendaId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.total_itens > 0) {
+                // Mostra o modal
+                const modal = document.getElementById('modalTroca');
+                modal.style.display = 'flex';
+                setTimeout(() => {
+                    modal.classList.add('active');
+                }, 10);
+                
+                // Foca no campo de pesquisa
+                document.getElementById('pesquisaProdutoTroca').focus();
+            } else {
+                alert('Adicione produtos à venda antes de realizar uma troca');
+            }
+        })
+        .catch(error => {
+            console.error('Erro:', error);
+            alert('Não foi possível verificar os itens da venda');
+        });
+}
+
+// Corrigindo a função fecharModalTroca
+function fecharModalTroca() {
+    const modal = document.getElementById('modalTroca');
+    modal.classList.remove('active');
+    setTimeout(() => {
+        modal.style.display = 'none';
+    }, 300);
+}
+
+function refazerTroca() {
+    // Limpa todos os campos e esconde as seções
+    document.getElementById('pesquisaProdutoTroca').value = '';
+    document.getElementById('pesquisaProdutoNovo').value = '';
+    document.getElementById('resultadoProdutoTroca').innerHTML = '';
+    document.getElementById('resultadoProdutoNovo').innerHTML = '';
+    document.getElementById('quantidadeTrocaContainer').style.display = 'none';
+    document.getElementById('quantidadeNovoContainer').style.display = 'none';
+    document.getElementById('resumoTroca').style.display = 'none';
+    document.getElementById('forma-pagamento-troca-container').style.display = 'none';
+    document.getElementById('btnConfirmarTroca').disabled = true;
+    
+    // Foca no primeiro campo
+    document.getElementById('pesquisaProdutoTroca').focus();
+}
+
+function buscarProdutoTroca() {
+    const termo = document.getElementById('pesquisaProdutoTroca').value.trim();
+    if (!termo) return;
+    
+    showLoading('Buscando produto...');
+    
+    fetch(`buscar_produto_ajax.php?termo=${encodeURIComponent(termo)}&cnpj_loja=<?= $cnpj_loja ?>`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.produtos.length > 0) {
+                let html = '<div class="produto-grid" style="grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));">';
+                
+                data.produtos.forEach(produto => {
+                    html += `
+                        <div class="produto-card" onclick="selecionarProdutoTroca(${produto.id_produto}, '${produto.nome_produto}', ${produto.preco_venda}, '${produto.unidade_medida}')">
+                            <div class="produto-img-container">
+                                ${produto.foto_produto ? 
+                                    `<img src="uploads/imagens/${produto.foto_produto}" class="produto-img" alt="${produto.nome_produto}">` : 
+                                    `<i class="fas fa-image produto-sem-imagem"></i>`
+                                }
+                            </div>
+                            <div class="produto-info-container">
+                                <div class="produto-nome" title="${produto.nome_produto}">${produto.nome_produto}</div>
+                                <div class="produto-codigo">${produto.referencia_interna}</div>
+                                <div class="produto-preco">R$ ${produto.preco_venda.toFixed(2).replace('.', ',')}</div>
+                                <div class="produto-unidade">${produto.unidade_medida}</div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                document.getElementById('resultadoProdutoTroca').innerHTML = html;
+            } else {
+                document.getElementById('resultadoProdutoTroca').innerHTML = `
+                    <div class="msg erro">
+                        <i class="fas fa-exclamation-triangle"></i> Nenhum produto encontrado
+                    </div>
+                `;
+            }
+        })
+        .catch(error => {
+            console.error('Erro:', error);
+            document.getElementById('resultadoProdutoTroca').innerHTML = `
+                <div class="msg erro">
+                    <i class="fas fa-exclamation-triangle"></i> Erro ao buscar produtos
+                </div>
+            `;
+        })
+        .finally(() => hideLoading());
+}
+
+function buscarProdutoNovo() {
+    const termo = document.getElementById('pesquisaProdutoNovo').value.trim();
+    if (!termo) return;
+    
+    showLoading('Buscando produto...');
+    
+    fetch(`buscar_produto_ajax.php?termo=${encodeURIComponent(termo)}&cnpj_loja=<?= $cnpj_loja ?>`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.produtos.length > 0) {
+                let html = '<div class="produto-grid" style="grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));">';
+                
+                data.produtos.forEach(produto => {
+                    html += `
+                        <div class="produto-card" onclick="selecionarProdutoNovo(${produto.id_produto}, '${produto.nome_produto}', ${produto.preco_venda}, '${produto.unidade_medida}')">
+                            <div class="produto-img-container">
+                                ${produto.foto_produto ? 
+                                    `<img src="uploads/imagens/${produto.foto_produto}" class="produto-img" alt="${produto.nome_produto}">` : 
+                                    `<i class="fas fa-image produto-sem-imagem"></i>`
+                                }
+                            </div>
+                            <div class="produto-info-container">
+                                <div class="produto-nome" title="${produto.nome_produto}">${produto.nome_produto}</div>
+                                <div class="produto-codigo">${produto.referencia_interna}</div>
+                                <div class="produto-preco">R$ ${produto.preco_venda.toFixed(2).replace('.', ',')}</div>
+                                <div class="produto-unidade">${produto.unidade_medida}</div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                document.getElementById('resultadoProdutoNovo').innerHTML = html;
+            } else {
+                document.getElementById('resultadoProdutoNovo').innerHTML = `
+                    <div class="msg erro">
+                        <i class="fas fa-exclamation-triangle"></i> Nenhum produto encontrado
+                    </div>
+                `;
+            }
+        })
+        .catch(error => {
+            console.error('Erro:', error);
+            document.getElementById('resultadoProdutoNovo').innerHTML = `
+                <div class="msg erro">
+                    <i class="fas fa-exclamation-triangle"></i> Erro ao buscar produtos
+                </div>
+            `;
+        })
+        .finally(() => hideLoading());
+}
+
+function selecionarProdutoTroca(id, nome, preco, unidade) {
+    document.getElementById('produto_troca_id').value = id;
+    document.getElementById('preco_troca').value = preco;
+    
+    document.getElementById('resultadoProdutoTroca').innerHTML = `
+        <div class="produto-selecionado" style="padding: 1rem; background: #f0f4ff; border-radius: 0.5rem;">
+            <h5 style="margin-bottom: 0.5rem; color: var(--primary);">Produto para Troca Selecionado:</h5>
+            <p><strong>${nome}</strong> - R$ ${preco.toFixed(2).replace('.', ',')} / ${unidade}</p>
+        </div>
+    `;
+    
+    document.getElementById('quantidadeTrocaContainer').style.display = 'block';
+    verificarTrocaCompleta();
+}
+
+function selecionarProdutoNovo(id, nome, preco, unidade) {
+    document.getElementById('produto_novo_id').value = id;
+    document.getElementById('preco_novo').value = preco;
+    
+    document.getElementById('resultadoProdutoNovo').innerHTML = `
+        <div class="produto-selecionado" style="padding: 1rem; background: #f0f4ff; border-radius: 0.5rem;">
+            <h5 style="margin-bottom: 0.5rem; color: var(--primary);">Produto Novo Selecionado:</h5>
+            <p><strong>${nome}</strong> - R$ ${preco.toFixed(2).replace('.', ',')} / ${unidade}</p>
+        </div>
+    `;
+    
+    document.getElementById('quantidadeNovoContainer').style.display = 'block';
+    verificarTrocaCompleta();
+}
+
+function verificarTrocaCompleta() {
+    const produtoTrocaId = document.getElementById('produto_troca_id').value;
+    const produtoNovoId = document.getElementById('produto_novo_id').value;
+    
+    if (produtoTrocaId && produtoNovoId) {
+        document.getElementById('resumoTroca').style.display = 'block';
+        calcularDiferencaTroca();
+    }
+}
+
+function calcularDiferencaTroca() {
+    const precoTroca = parseFloat(document.getElementById('preco_troca').value) || 0;
+    const precoNovo = parseFloat(document.getElementById('preco_novo').value) || 0;
+    const qtdTroca = parseFloat(document.getElementById('quantidade_troca').value) || 1;
+    const qtdNovo = parseFloat(document.getElementById('quantidade_novo').value) || 1;
+    
+    const valorTroca = precoTroca * qtdTroca;
+    const valorNovo = precoNovo * qtdNovo;
+    const diferenca = valorNovo - valorTroca;
+    
+    document.getElementById('valor-produto-troca').textContent = `R$ ${valorTroca.toFixed(2).replace('.', ',')}`;
+    document.getElementById('valor-produto-novo').textContent = `R$ ${valorNovo.toFixed(2).replace('.', ',')}`;
+    document.getElementById('valor-diferenca').textContent = `R$ ${Math.abs(diferenca).toFixed(2).replace('.', ',')}`;
+    document.getElementById('input_valor_diferenca').value = diferenca;
+    
+    // Atualiza cor conforme o valor
+    const diffElement = document.getElementById('valor-diferenca');
+    if (diferenca > 0) {
+        diffElement.style.color = 'var(--danger)';
+        diffElement.textContent = `+ R$ ${diferenca.toFixed(2).replace('.', ',')}`;
+        document.getElementById('forma-pagamento-troca-container').style.display = 'block';
+    } else if (diferenca < 0) {
+        diffElement.style.color = 'var(--success)';
+        diffElement.textContent = `- R$ ${Math.abs(diferenca).toFixed(2).replace('.', ',')}`;
+        document.getElementById('forma-pagamento-troca-container').style.display = 'none';
+    } else {
+        diffElement.style.color = 'var(--primary)';
+        diffElement.textContent = `R$ 0,00`;
+        document.getElementById('forma-pagamento-troca-container').style.display = 'none';
+    }
+    
+    document.getElementById('btnConfirmarTroca').disabled = false;
+}
 function gerarRelatorioVendedores() {
     const dataInicio = document.getElementById('data_inicio').value;
     const dataFim = document.getElementById('data_fim').value;
@@ -4140,6 +4720,20 @@ function gerarRelatorioVendedores() {
         hideLoading();
     });
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Verifica se há um botão de nova venda
+    const btnNovaVenda = document.querySelector('[name="nova_venda"]');
+    if (btnNovaVenda) {
+        btnNovaVenda.addEventListener('click', function(e) {
+            if (!<?= $caixa_aberto ? 'true' : 'false' ?>) {
+                e.preventDefault();
+                alert('O caixa precisa estar aberto para iniciar uma nova venda');
+                abrirModalCaixa();
+            }
+        });
+    }
+});
 
 // Delegation para botões de ação na tabela de vendas
 document.addEventListener('click', function(e) {
@@ -4216,5 +4810,3 @@ document.addEventListener('click', function(e) {
 </script>
 </body>
 </html>
-
-atualizarTabelaItens
